@@ -1,2 +1,7 @@
 # hello-world
-Just another repo, they told me to! 
+
+
+Hi people!
+
+
+Sooo im just learning how to move around here soo dont mind me, winter is better than summer!
