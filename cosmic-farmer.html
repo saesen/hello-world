@@ -1,0 +1,1362 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cosmic Farmer - Stardew Valley meets No Man's Sky</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            touch-action: none;
+            font-family: 'Courier New', monospace;
+        }
+
+        #gameCanvas {
+            display: block;
+            background: #000;
+        }
+
+        #uiContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+        }
+
+        #hud {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #fff;
+            font-size: 12px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: auto;
+        }
+
+        #menuOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+        }
+
+        #inventory {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+            pointer-events: auto;
+        }
+
+        .inventory-slot {
+            width: 32px;
+            height: 32px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            cursor: pointer;
+        }
+
+        .menu-button {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.4);
+            color: #fff;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            pointer-events: auto;
+        }
+
+        .menu-button:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        #planetInfo {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            padding: 20px;
+            border-radius: 10px;
+            color: #fff;
+            display: none;
+            pointer-events: auto;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 18px;
+            pointer-events: none;
+        }
+
+        #fpsCounter {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #0f0;
+            font-size: 10px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="uiContainer">
+        <div id="fpsCounter">FPS: 0</div>
+        <div id="hud">
+            <div>Pozycja: <span id="position">0, 0</span></div>
+            <div>Paliwo: <span id="fuel">100</span>/<span id="maxFuel">100</span></div>
+            <div>Pieniądze: <span id="money">0</span></div>
+            <div>Dzień: <span id="day">1</span></div>
+        </div>
+        
+        <div id="inventory"></div>
+        
+        <div id="menuOverlay">
+            <h2>Cosmic Farmer</h2>
+            <button class="menu-button" onclick="resumeGame()">Wznów grę</button>
+            <button class="menu-button" onclick="newGame()">Nowa gra</button>
+            <button class="menu-button" onclick="saveGame()">Zapisz grę</button>
+            <button class="menu-button" onclick="loadGame()">Wczytaj grę</button>
+            <button class="menu-button" onclick="toggleFullscreen()">Pełny ekran</button>
+        </div>
+        
+        <div id="planetInfo">
+            <h3 id="planetName">Nazwa planety</h3>
+            <div>Typ: <span id="planetType">?</span></div>
+            <div>Zasoby: <span id="planetResources">?</span></div>
+            <div>Poziom: <span id="planetLevel">?</span></div>
+            <button class="menu-button" onclick="landOnPlanet()" id="landButton">Wyląduj</button>
+            <button class="menu-button" onclick="hidePlanetInfo()">Anuluj</button>
+        </div>
+        
+        <div id="loading">Ładowanie wszechświata...</div>
+    </div>
+
+    <script>
+        // ==================== KONFIGURACJA ====================
+        const CONFIG = {
+            // Rozmiar kanwy
+            CANVAS_WIDTH: 800,
+            CANVAS_HEIGHT: 600,
+            
+            // Skalowanie dla urządzeń mobilnych
+            SCALE_TO_FIT: true,
+            
+            // Parametry wszechświata
+            UNIVERSE_SIZE: 10000,
+            STAR_DENSITY: 0.0005,
+            PLANET_DENSITY: 0.0002,
+            
+            // Parametry statku
+            SHIP_SPEED: 5,
+            SHIP_ROTATION_SPEED: 0.05,
+            FUEL_CONSUMPTION: 0.1,
+            INITIAL_FUEL: 100,
+            MAX_FUEL: 500,
+            
+            // Parametry planety
+            PLANET_MIN_RADIUS: 20,
+            PLANET_MAX_RADIUS: 80,
+            PLANET_MIN_ORBIT: 50,
+            PLANET_MAX_ORBIT: 200,
+            
+            // Typy planet
+            PLANET_TYPES: [
+                { name: "Ziemska", color: [50, 150, 50], resources: ['drewo', 'kamien', 'zboze'], farmable: true },
+                { name: "Lodowa", color: [150, 200, 255], resources: ['lod', 'krystal'], farmable: false },
+                { name: "Wulkaniczna", color: [200, 100, 50], resources: ['metal', 'siarka', 'kamien'], farmable: false },
+                { name: "Pustynna", color: [200, 180, 100], resources: ['piasek', 'szklo'], farmable: true },
+                { name: "Leśna", color: [30, 100, 30], resources: ['drewo', 'zioła', 'owoc'], farmable: true },
+                { name: "Wodna", color: [50, 100, 200], resources: ['ryba', 'alg'], farmable: false }
+            ],
+            
+            // Zasoby
+            RESOURCES: {
+                drewo: { name: "Drewno", icon: "🌳", value: 10 },
+                kamien: { name: "Kamień", icon: "🪨", value: 5 },
+                zboze: { name: "Zboże", icon: "🌾", value: 20 },
+                lod: { name: "Lód", icon: "❄️", value: 15 },
+                krystal: { name: "Kryształ", icon: "💎", value: 50 },
+                metal: { name: "Metal", icon: "⚙️", value: 30 },
+                siarka: { name: "Siarka", icon: "🔥", value: 25 },
+                piasek: { name: "Piasek", icon: "🏖️", value: 8 },
+                szklo: { name: "Szkło", icon: "💎", value: 15 },
+                zioła: { name: "Zioła", icon: "🌿", value: 40 },
+                owoc: { name: "Owoc", icon: "🍎", value: 35 },
+                ryba: { name: "Ryba", icon: "🐟", value: 25 },
+                alg: { name: "Alg", icon: "🌊", value: 18 }
+            },
+            
+            // Ulepszenia statku
+            SHIP_UPGRADES: [
+                { name: "Silniejszy silnik", cost: 100, speedBoost: 2, fuelBoost: 50 },
+                { name: "Lepsze zbiorniki", cost: 200, fuelBoost: 100 },
+                { name: "Skaner zasobów", cost: 150, resourceDetection: true }
+            ],
+            
+            // Rośliny do uprawy
+            CROPS: [
+                { name: "Zboże", growthTime: 3, value: 20, seedCost: 5 },
+                { name: "Zioła", growthTime: 5, value: 40, seedCost: 10 },
+                { name: "Owoce", growthTime: 8, value: 35, seedCost: 15 }
+            ]
+        };
+
+        // ==================== ZMIENNE GLOBALNE ====================
+        let canvas, ctx;
+        let gameState = {};
+        let universe = {};
+        let ship = {};
+        let camera = {};
+        let input = {};
+        let lastTime = 0;
+        let isPaused = false;
+        let selectedPlanet = null;
+        let inventorySlots = [];
+        let gameLoopId = null;
+
+        // ==================== INICJALIZACJA ====================
+        function init() {
+            // Pobierz canvas
+            canvas = document.getElementById('gameCanvas');
+            ctx = canvas.getContext('2d');
+            
+            // Ustaw rozmiar canvas
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // Inicjalizuj wejście
+            initInput();
+            
+            // Inicjalizuj interfejs
+            initUI();
+            
+            // Inicjalizuj nową grę
+            newGame();
+            
+            // Rozpocznij pętlę gry
+            gameLoopId = requestAnimationFrame(gameLoop);
+            
+            // Ukryj loading
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function resizeCanvas() {
+            const container = document.body;
+            let width = CONFIG.CANVAS_WIDTH;
+            let height = CONFIG.CANVAS_HEIGHT;
+            
+            if (CONFIG.SCALE_TO_FIT) {
+                const aspectRatio = width / height;
+                const windowRatio = window.innerWidth / window.innerHeight;
+                
+                if (windowRatio > aspectRatio) {
+                    width = window.innerHeight * aspectRatio;
+                    height = window.innerHeight;
+                } else {
+                    width = window.innerWidth;
+                    height = window.innerWidth / aspectRatio;
+                }
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            // Przeskaluj UI
+            if (canvas.width < 600) {
+                document.getElementById('hud').style.fontSize = '10px';
+                document.getElementById('inventory').style.gridTemplateColumns = 'repeat(3, 1fr)';
+            } else {
+                document.getElementById('hud').style.fontSize = '12px';
+                document.getElementById('inventory').style.gridTemplateColumns = 'repeat(5, 1fr)';
+            }
+        }
+
+        function initInput() {
+            input = {
+                keys: {},
+                mouse: { x: 0, y: 0, left: false, right: false },
+                touch: { x: 0, y: 0, active: false }
+            };
+            
+            // Klawiatura
+            window.addEventListener('keydown', (e) => {
+                input.keys[e.code] = true;
+                
+                // Obsługa klawiszy specjalnych
+                if (e.code === 'Escape') {
+                    toggleMenu();
+                }
+                if (e.code === 'Space') {
+                    // Próba lądowania na planecie
+                    if (selectedPlanet) {
+                        landOnPlanet();
+                    }
+                }
+            });
+            
+            window.addEventListener('keyup', (e) => {
+                input.keys[e.code] = false;
+            });
+            
+            // Mysz
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                input.mouse.x = e.clientX - rect.left;
+                input.mouse.y = e.clientY - rect.top;
+            });
+            
+            canvas.addEventListener('mousedown', (e) => {
+                if (e.button === 0) input.mouse.left = true;
+                if (e.button === 2) input.mouse.right = true;
+                
+                // Sprawdź czy kliknięto planetę
+                checkPlanetClick(e.clientX, e.clientY);
+            });
+            
+            canvas.addEventListener('mouseup', (e) => {
+                if (e.button === 0) input.mouse.left = false;
+                if (e.button === 2) input.mouse.right = false;
+            });
+            
+            canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+            
+            // Dotyk
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const touch = e.touches[0];
+                input.touch.x = touch.clientX - rect.left;
+                input.touch.y = touch.clientY - rect.top;
+                input.touch.active = true;
+                
+                checkPlanetClick(touch.clientX, touch.clientY);
+            });
+            
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                input.touch.active = false;
+            });
+            
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const touch = e.touches[0];
+                input.touch.x = touch.clientX - rect.left;
+                input.touch.y = touch.clientY - rect.top;
+            });
+        }
+
+        function initUI() {
+            // Inicjalizuj sloty inwentarza
+            const inventoryDiv = document.getElementById('inventory');
+            inventoryDiv.innerHTML = '';
+            
+            for (let i = 0; i < 20; i++) {
+                const slot = document.createElement('div');
+                slot.className = 'inventory-slot';
+                slot.id = `inv-slot-${i}`;
+                slot.onclick = () => selectInventorySlot(i);
+                inventoryDiv.appendChild(slot);
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('position').textContent = `${Math.round(ship.x)}, ${Math.round(ship.y)}`;
+            document.getElementById('fuel').textContent = Math.round(ship.fuel);
+            document.getElementById('maxFuel').textContent = Math.round(ship.maxFuel);
+            document.getElementById('money').textContent = gameState.money;
+            document.getElementById('day').textContent = gameState.day;
+        }
+
+        function updateInventory() {
+            for (let i = 0; i < 20; i++) {
+                const slot = document.getElementById(`inv-slot-${i}`);
+                if (slot) {
+                    const item = gameState.inventory[i];
+                    if (item && item.type === 'resource') {
+                        const resource = CONFIG.RESOURCES[item.id];
+                        slot.textContent = resource ? resource.icon : '?';
+                        slot.title = `${resource.name}: ${item.amount}`;
+                    } else if (item && item.type === 'crop') {
+                        const crop = CONFIG.CROPS.find(c => c.name === item.id);
+                        slot.textContent = crop ? '🌱' : '?';
+                        slot.title = `${item.id}: ${item.amount} nasion`;
+                    } else {
+                        slot.textContent = '';
+                        slot.title = '';
+                    }
+                }
+            }
+        }
+
+        function selectInventorySlot(index) {
+            // Można tutaj dodać obsługę wyboru przedmiotu
+            console.log('Wybrano slot:', index);
+        }
+
+        // ==================== NOWA GRA ====================
+        function newGame() {
+            // Wygeneruj nasienie dla proceduralnej generacji
+            const seed = Date.now().toString().split('').reverse().join('');
+            Math.seedrandom(seed);
+            
+            // Inicjalizuj stan gry
+            gameState = {
+                seed: seed,
+                money: 0,
+                day: 1,
+                inventory: [],
+                discoveredPlanets: [],
+                shipUpgrades: [],
+                currentPlanet: null,
+                farm: { plots: [], crops: [] },
+                stats: {
+                    planetsVisited: 0,
+                    resourcesCollected: 0,
+                    distanceTraveled: 0
+                }
+            };
+            
+            // Inicjalizuj statek
+            ship = {
+                x: 0,
+                y: 0,
+                angle: 0,
+                speed: CONFIG.SHIP_SPEED,
+                fuel: CONFIG.INITIAL_FUEL,
+                maxFuel: CONFIG.MAX_FUEL,
+                scanning: false,
+                scanRange: 200
+            };
+            
+            // Inicjalizuj kamerę
+            camera = {
+                x: 0,
+                y: 0,
+                zoom: 1
+            };
+            
+            // Wygeneruj wszechświat
+            generateUniverse();
+            
+            // Zresetuj zmienną pauzy
+            isPaused = false;
+            selectedPlanet = null;
+            
+            // Ukryj menu
+            document.getElementById('menuOverlay').style.display = 'none';
+            document.getElementById('planetInfo').style.display = 'none';
+            
+            // Zaktualizuj UI
+            updateHUD();
+            updateInventory();
+        }
+
+        // ==================== GENEROWANIE WSZCHŚWIATA ====================
+        function generateUniverse() {
+            universe = {
+                stars: [],
+                planets: [],
+                systems: []
+            };
+            
+            // Generuj gwiazdy
+            const starCount = Math.floor(CONFIG.UNIVERSE_SIZE * CONFIG.UNIVERSE_SIZE * CONFIG.STAR_DENSITY);
+            for (let i = 0; i < starCount; i++) {
+                universe.stars.push(generateStar());
+            }
+            
+            // Generuj planety
+            const planetCount = Math.floor(CONFIG.UNIVERSE_SIZE * CONFIG.UNIVERSE_SIZE * CONFIG.PLANET_DENSITY);
+            for (let i = 0; i < planetCount; i++) {
+                universe.planets.push(generatePlanet());
+            }
+            
+            // Generuj systemy gwiezdne (grupowanie planet wokół gwiazd)
+            generateStarSystems();
+        }
+
+        function generateStar() {
+            const distance = Math.sqrt(Math.random()) * CONFIG.UNIVERSE_SIZE * 0.45;
+            const angle = Math.random() * Math.PI * 2;
+            
+            return {
+                id: `star-${Math.random().toString(36).substr(2, 9)}`,
+                x: distance * Math.cos(angle),
+                y: distance * Math.sin(angle),
+                size: 1 + Math.random() * 3,
+                brightness: 0.5 + Math.random() * 0.5,
+                color: getStarColor(),
+                twinkle: Math.random() * Math.PI * 2,
+                twinkleSpeed: 0.01 + Math.random() * 0.02
+            };
+        }
+
+        function getStarColor() {
+            const colors = [
+                [255, 255, 200], // Żółta
+                [255, 200, 150], // Pomarańczowa
+                [255, 180, 100], // Czerwona
+                [200, 220, 255], // Niebieska
+                [255, 255, 255]  // Biała
+            ];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        function generatePlanet() {
+            const type = CONFIG.PLANET_TYPES[Math.floor(Math.random() * CONFIG.PLANET_TYPES.length)];
+            
+            // Generuj pozycję z dala od centrum
+            const distance = CONFIG.PLANET_MIN_ORBIT + Math.random() * 
+                            (CONFIG.UNIVERSE_SIZE * 0.4 - CONFIG.PLANET_MIN_ORBIT);
+            const angle = Math.random() * Math.PI * 2;
+            
+            return {
+                id: `planet-${Math.random().toString(36).substr(2, 9)}`,
+                x: distance * Math.cos(angle),
+                y: distance * Math.sin(angle),
+                radius: CONFIG.PLANET_MIN_RADIUS + Math.random() * 
+                       (CONFIG.PLANET_MAX_RADIUS - CONFIG.PLANET_MIN_RADIUS),
+                type: type.name,
+                color: type.color,
+                resources: type.resources,
+                farmable: type.farmable,
+                level: 1 + Math.floor(Math.random() * 5),
+                discovered: false,
+                visited: false,
+                name: generatePlanetName(type.name),
+                // Orbita
+                orbitRadius: distance,
+                orbitAngle: angle,
+                orbitSpeed: (0.001 + Math.random() * 0.005) * (Math.random() > 0.5 ? 1 : -1)
+            };
+        }
+
+        function generatePlanetName(type) {
+            const prefixes = ['Alfa', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta'];
+            const suffixes = ['Prime', 'Secundus', 'Tertius', 'Quartus', 'V', 'VI', 'VII', 'VIII', 'IX'];
+            const typeNames = {
+                'Ziemska': ['Terra', 'Gaia', 'Eden', 'Verdant'],
+                'Lodowa': ['Frost', 'Glacia', 'Nix', 'Borealis'],
+                'Wulkaniczna': ['Ignis', 'Pyro', 'Magma', 'Vulcan'],
+                'Pustynna': ['Arid', 'Sahara', 'Dune', 'Xerxes'],
+                'Leśna': ['Silva', 'Viridis', 'Forest', 'Green'],
+                'Wodna': ['Aqua', 'Marina', 'Neptune', 'Poseidon']
+            };
+            
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const typeName = typeNames[type] ? typeNames[type][Math.floor(Math.random() * typeNames[type].length)] : 'X';
+            const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+            
+            return `${prefix} ${typeName}-${suffix}`;
+        }
+
+        function generateStarSystems() {
+            // Grupuj planety wokół gwiazd
+            const systems = [];
+            
+            // Dla każdej gwiazdy, dodaj kilka planet w jej pobliżu
+            universe.stars.forEach(star => {
+                const planetCount = 1 + Math.floor(Math.random() * 4); // 1-4 planety na system
+                const systemPlanets = [];
+                
+                for (let i = 0; i < planetCount; i++) {
+                    // Znajdź planetę w pobliżu gwiazdy
+                    const nearbyPlanets = universe.planets.filter(p => {
+                        const dx = p.x - star.x;
+                        const dy = p.y - star.y;
+                        return Math.sqrt(dx * dx + dy * dy) < 300;
+                    });
+                    
+                    if (nearbyPlanets.length > 0) {
+                        const planet = nearbyPlanets[Math.floor(Math.random() * nearbyPlanets.length)];
+                        systemPlanets.push(planet);
+                        
+                        // Usuń planetę z głównej listy, żeby nie była dodana ponownie
+                        const index = universe.planets.indexOf(planet);
+                        if (index > -1) {
+                            universe.planets.splice(index, 1);
+                        }
+                    }
+                }
+                
+                if (systemPlanets.length > 0) {
+                    systems.push({
+                        star: star,
+                        planets: systemPlanets
+                    });
+                }
+            });
+            
+            universe.systems = systems;
+        }
+
+        // ==================== RENDEROWANIE ====================
+        function render() {
+            // Wyczyść canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Zapisz stan kontekstu
+            ctx.save();
+            
+            // Przesuń kamerę
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.scale(camera.zoom, camera.zoom);
+            ctx.translate(-camera.x, -camera.y);
+            
+            // Narysuj tło (mgławice)
+            drawNebulaBackground();
+            
+            // Narysuj gwiazdy
+            drawStars();
+            
+            // Narysuj systemy gwiezdne
+            drawStarSystems();
+            
+            // Narysuj planety
+            drawPlanets();
+            
+            // Narysuj statek
+            drawShip();
+            
+            // Narysuj skaner (jeśli aktywny)
+            if (ship.scanning) {
+                drawScanner();
+            }
+            
+            // Przywróć stan kontekstu
+            ctx.restore();
+            
+            // Narysuj interfejs (HUD)
+            drawHUD();
+        }
+
+        function drawNebulaBackground() {
+            // Subtelne tło mgławicowe
+            const gradient = ctx.createRadialGradient(
+                camera.x, camera.y, 0,
+                camera.x, camera.y, CONFIG.UNIVERSE_SIZE * 0.5
+            );
+            
+            gradient.addColorStop(0, '#0a0a1a');
+            gradient.addColorStop(0.5, '#050510');
+            gradient.addColorStop(1, '#000000');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(
+                camera.x - CONFIG.UNIVERSE_SIZE / 2,
+                camera.y - CONFIG.UNIVERSE_SIZE / 2,
+                CONFIG.UNIVERSE_SIZE,
+                CONFIG.UNIVERSE_SIZE
+            );
+        }
+
+        function drawStars() {
+            universe.stars.forEach(star => {
+                const dx = star.x - camera.x;
+                const dy = star.y - camera.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Tylko rysuj gwiazdy w zasięgu widoku
+                if (distance > CONFIG.UNIVERSE_SIZE / 2) return;
+                
+                // Mruganie gwiazd
+                const twinkle = Math.sin(Date.now() * star.twinkleSpeed + star.twinkle) * 0.3 + 0.7;
+                const brightness = star.brightness * twinkle;
+                
+                // Rozmiar gwiazdy zależy od odległości
+                const size = star.size * Math.max(0.1, 1 - distance / (CONFIG.UNIVERSE_SIZE / 2));
+                
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, size, 0, Math.PI * 2);
+                
+                const color = `rgba(${star.color[0]}, ${star.color[1]}, ${star.color[2]}, ${brightness})`;
+                ctx.fillStyle = color;
+                
+                // Efekt świecenia
+                const gradient = ctx.createRadialGradient(
+                    star.x, star.y, 0,
+                    star.x, star.y, size * 3
+                );
+                gradient.addColorStop(0, color);
+                gradient.addColorStop(1, 'rgba(0,0,0,0)');
+                
+                ctx.fillStyle = gradient;
+                ctx.fill();
+            });
+        }
+
+        function drawStarSystems() {
+            universe.systems.forEach(system => {
+                // Narysuj orbitę dla planet w systemie
+                system.planets.forEach(planet => {
+                    const dx = planet.x - system.star.x;
+                    const dy = planet.y - system.star.y;
+                    const orbitRadius = Math.sqrt(dx * dx + dy * dy);
+                    
+                    // Narysuj orbitę (tylko jeśli system jest blisko)
+                    const starDist = Math.sqrt(
+                        Math.pow(system.star.x - camera.x, 2) + 
+                        Math.pow(system.star.y - camera.y, 2)
+                    );
+                    
+                    if (starDist < 500) {
+                        ctx.beginPath();
+                        ctx.arc(
+                            system.star.x, system.star.y,
+                            orbitRadius, 0, Math.PI * 2
+                        );
+                        ctx.strokeStyle = 'rgba(100, 100, 255, 0.1)';
+                        ctx.stroke();
+                    }
+                });
+            });
+        }
+
+        function drawPlanets() {
+            universe.planets.forEach(planet => {
+                const dx = planet.x - camera.x;
+                const dy = planet.y - camera.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Tylko rysuj planety w zasięgu widoku
+                if (distance > CONFIG.UNIVERSE_SIZE / 2) return;
+                
+                // Oblicz rozmiar planety na ekranie
+                const screenRadius = planet.radius * Math.max(0.5, 1 - distance / (CONFIG.UNIVERSE_SIZE / 2));
+                
+                // Cień planety
+                ctx.beginPath();
+                ctx.arc(planet.x + 2, planet.y + 2, screenRadius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(0, 0, 0, 0.3)`;
+                ctx.fill();
+                
+                // Narysuj planetę
+                ctx.beginPath();
+                ctx.arc(planet.x, planet.y, screenRadius, 0, Math.PI * 2);
+                
+                // Kolor planety
+                const color = `rgb(${planet.color[0]}, ${planet.color[1]}, ${planet.color[2]})`;
+                ctx.fillStyle = color;
+                ctx.fill();
+                
+                // Dodaj teksturę (pasy)
+                drawPlanetTexture(planet, screenRadius);
+                
+                // Zaznacz wybraną planetę
+                if (selectedPlanet && selectedPlanet.id === planet.id) {
+                    ctx.beginPath();
+                    ctx.arc(planet.x, planet.y, screenRadius + 5, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#ffff00';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                
+                // Narysuj nazwę planety (jeśli odkryta)
+                if (planet.discovered) {
+                    ctx.fillStyle = '#fff';
+                    ctx.font = `${Math.max(8, 12 - distance / 100)}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(planet.name, planet.x, planet.y - screenRadius - 10);
+                }
+            });
+            
+            // Narysuj planety w systemach
+            universe.systems.forEach(system => {
+                system.planets.forEach(planet => {
+                    const dx = planet.x - camera.x;
+                    const dy = planet.y - camera.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance > CONFIG.UNIVERSE_SIZE / 2) return;
+                    
+                    const screenRadius = planet.radius * Math.max(0.5, 1 - distance / (CONFIG.UNIVERSE_SIZE / 2));
+                    
+                    // Cień
+                    ctx.beginPath();
+                    ctx.arc(planet.x + 2, planet.y + 2, screenRadius, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.fill();
+                    
+                    // Planeta
+                    ctx.beginPath();
+                    ctx.arc(planet.x, planet.y, screenRadius, 0, Math.PI * 2);
+                    const color = `rgb(${planet.color[0]}, ${planet.color[1]}, ${planet.color[2]})`;
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                    
+                    drawPlanetTexture(planet, screenRadius);
+                    
+                    // Zaznacz wybraną planetę
+                    if (selectedPlanet && selectedPlanet.id === planet.id) {
+                        ctx.beginPath();
+                        ctx.arc(planet.x, planet.y, screenRadius + 5, 0, Math.PI * 2);
+                        ctx.strokeStyle = '#ffff00';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                    
+                    // Nazwa
+                    if (planet.discovered) {
+                        ctx.fillStyle = '#fff';
+                        ctx.font = `${Math.max(8, 12 - distance / 100)}px Arial`;
+                        ctx.textAlign = 'center';
+                        ctx.fillText(planet.name, planet.x, planet.y - screenRadius - 10);
+                    }
+                });
+            });
+        }
+
+        function drawPlanetTexture(planet, radius) {
+            // Dodaj proste pasy tekstury
+            ctx.save();
+            ctx.globalAlpha = 0.3;
+            
+            // Pionowe pasy
+            for (let i = 0; i < 5; i++) {
+                const angle = (i / 5) * Math.PI * 2 + (Date.now() * 0.001);
+                const width = radius * 0.2;
+                
+                ctx.beginPath();
+                ctx.arc(planet.x, planet.y, radius - width * i, 
+                        angle - width / radius, angle + width / radius);
+                
+                // Ciemniejsze pasy
+                const darkColor = `rgb(${(planet.color[0] * 0.7)}, ${(planet.color[1] * 0.7)}, ${(planet.color[2] * 0.7)})`;
+                ctx.strokeStyle = darkColor;
+                ctx.lineWidth = width;
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+
+        function drawShip() {
+            // Oblicz pozycję statku względem kamery
+            const shipX = ship.x;
+            const shipY = ship.y;
+            
+            // Narysuj płomień silnika (jeśli statek się porusza)
+            if (input.keys['KeyW'] || input.keys['ArrowUp'] || input.touch.active) {
+                const flameLength = 15 + Math.random() * 5;
+                const flameWidth = 8 + Math.random() * 2;
+                
+                ctx.save();
+                ctx.translate(shipX, shipY);
+                ctx.rotate(ship.angle);
+                
+                // Płomień
+                ctx.beginPath();
+                ctx.moveTo(-10, 0);
+                ctx.lineTo(-10 - flameLength, -flameWidth / 2);
+                ctx.lineTo(-10 - flameLength * 0.8, 0);
+                ctx.lineTo(-10 - flameLength, flameWidth / 2);
+                ctx.closePath();
+                
+                ctx.fillStyle = 'rgba(255, 150, 50, 0.8)';
+                ctx.fill();
+                
+                ctx.restore();
+            }
+            
+            // Narysuj statek
+            ctx.save();
+            ctx.translate(shipX, shipY);
+            ctx.rotate(ship.angle);
+            
+            // Korpus statku
+            ctx.beginPath();
+            ctx.moveTo(20, 0);
+            ctx.lineTo(-10, -10);
+            ctx.lineTo(-15, 0);
+            ctx.lineTo(-10, 10);
+            ctx.closePath();
+            
+            ctx.fillStyle = '#555';
+            ctx.fill();
+            
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Kabina
+            ctx.beginPath();
+            ctx.arc(-5, 0, 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#77a';
+            ctx.fill();
+            
+            // Działko (opcjonalnie)
+            ctx.beginPath();
+            ctx.moveTo(20, 0);
+            ctx.lineTo(25, -3);
+            ctx.lineTo(25, 3);
+            ctx.closePath();
+            ctx.fillStyle = '#333';
+            ctx.fill();
+            
+            ctx.restore();
+            
+            // Narysuj wskaźnik kierunku (celownik)
+            ctx.save();
+            ctx.translate(shipX, shipY);
+            ctx.rotate(ship.angle);
+            
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(50, 0);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function drawScanner() {
+            ctx.save();
+            ctx.translate(ship.x, ship.y);
+            
+            // Koło skanera
+            ctx.beginPath();
+            ctx.arc(0, 0, ship.scanRange, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Animacja skanowania
+            const scanAngle = Date.now() * 0.01;
+            ctx.beginPath();
+            ctx.arc(0, 0, ship.scanRange, scanAngle, scanAngle + Math.PI / 6);
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function drawHUD() {
+            // Pasek paliwa
+            const fuelPercent = ship.fuel / ship.maxFuel;
+            const fuelBarWidth = 100;
+            const fuelBarHeight = 10;
+            
+            ctx.fillStyle = '#333';
+            ctx.fillRect(20, canvas.height - 40, fuelBarWidth, fuelBarHeight);
+            
+            ctx.fillStyle = fuelPercent > 0.25 ? (fuelPercent > 0.5 ? '#0f0' : '#ff0') : '#f00';
+            ctx.fillRect(20, canvas.height - 40, fuelBarWidth * fuelPercent, fuelBarHeight);
+            
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText('Paliwo:', 20, canvas.height - 50);
+            
+            // Mini mapa (radar)
+            const radarSize = 100;
+            const radarX = canvas.width - radarSize - 20;
+            const radarY = canvas.height - radarSize - 20;
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(radarX, radarY, radarSize, radarSize);
+            
+            ctx.strokeStyle = '#555';
+            ctx.strokeRect(radarX, radarY, radarSize, radarSize);
+            
+            // Statek na radarze (w centrum)
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(radarX + radarSize / 2, radarY + radarSize / 2, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Planety na radarze
+            const allPlanets = [...universe.planets, ...universe.systems.flatMap(s => s.planets)];
+            allPlanets.forEach(planet => {
+                const dx = planet.x - ship.x;
+                const dy = planet.y - ship.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance > ship.scanRange) return;
+                
+                const radarScale = radarSize / (ship.scanRange * 2);
+                const radarXPos = radarX + radarSize / 2 + dx * radarScale;
+                const radarYPos = radarY + radarSize / 2 + dy * radarScale;
+                
+                ctx.fillStyle = planet.discovered ? `#${planet.color.map(c => c.toString(16).padStart(2, '0')).join('')}` : '#555';
+                ctx.beginPath();
+                ctx.arc(radarXPos, radarYPos, 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Kółko zasięgu skanera
+            ctx.beginPath();
+            ctx.arc(radarX + radarSize / 2, radarY + radarSize / 2, radarSize / 2, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        // ==================== LOGIKA GRY ====================
+        function update(deltaTime) {
+            if (isPaused) return;
+            
+            // Aktualizuj pozycję kamery (śledź statek)
+            camera.x = ship.x;
+            camera.y = ship.y;
+            
+            // Obsługa ruchu statku
+            handleShipMovement(deltaTime);
+            
+            // Obsługa skanera
+            if (input.keys['KeyS'] || input.keys['ArrowDown']) {
+                ship.scanning = true;
+            } else {
+                ship.scanning = false;
+            }
+            
+            // Aktualizuj odkryte planety w zasięgu skanera
+            updateDiscoveredPlanets();
+            
+            // Aktualizuj orbitę planet
+            updatePlanetOrbits(deltaTime);
+            
+            // Aktualizuj statystyki
+            gameState.stats.distanceTraveled += Math.sqrt(
+                Math.pow(ship.x - (ship.x - (input.keys['KeyW'] ? ship.speed : 0)), 2) +
+                Math.pow(ship.y - (ship.y - (input.keys['KeyW'] ? ship.speed : 0)), 2)
+            );
+        }
+
+        function handleShipMovement(deltaTime) {
+            const moveSpeed = ship.speed * deltaTime * 0.016; // Normalizacja dla 60 FPS
+            
+            // Obracanie statku
+            if (input.keys['KeyA'] || input.keys['ArrowLeft']) {
+                ship.angle -= CONFIG.SHIP_ROTATION_SPEED * deltaTime * 0.016;
+            }
+            if (input.keys['KeyD'] || input.keys['ArrowRight']) {
+                ship.angle += CONFIG.SHIP_ROTATION_SPEED * deltaTime * 0.016;
+            }
+            
+            // Ruch do przodu
+            if ((input.keys['KeyW'] || input.keys['ArrowUp'] || input.touch.active) && ship.fuel > 0) {
+                ship.x += Math.cos(ship.angle) * moveSpeed;
+                ship.y += Math.sin(ship.angle) * moveSpeed;
+                ship.fuel -= CONFIG.FUEL_CONSUMPTION * deltaTime * 0.016;
+                
+                if (ship.fuel < 0) ship.fuel = 0;
+            }
+            
+            // Ruch do tyłu (wolniejszy)
+            if (input.keys['KeyX'] || input.keys['ArrowDown']) {
+                ship.x -= Math.cos(ship.angle) * moveSpeed * 0.5;
+                ship.y -= Math.sin(ship.angle) * moveSpeed * 0.5;
+            }
+            
+            // Ogranicz pozycję statku do wszechświata
+            const maxDist = CONFIG.UNIVERSE_SIZE / 2;
+            const distFromCenter = Math.sqrt(ship.x * ship.x + ship.y * ship.y);
+            
+            if (distFromCenter > maxDist) {
+                const angle = Math.atan2(ship.y, ship.x);
+                ship.x = Math.cos(angle) * maxDist;
+                ship.y = Math.sin(angle) * maxDist;
+            }
+        }
+
+        function updateDiscoveredPlanets() {
+            const allPlanets = [...universe.planets, ...universe.systems.flatMap(s => s.planets)];
+            
+            allPlanets.forEach(planet => {
+                const dx = planet.x - ship.x;
+                const dy = planet.y - ship.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Odkryj planetę jeśli jest w zasięgu skanera
+                if (distance <= ship.scanRange) {
+                    planet.discovered = true;
+                    
+                    // Sprawdź czy planeta nie została jeszcze dodana do odkrytych
+                    if (!gameState.discoveredPlanets.find(p => p.id === planet.id)) {
+                        gameState.discoveredPlanets.push({
+                            id: planet.id,
+                            name: planet.name,
+                            type: planet.type,
+                            x: planet.x,
+                            y: planet.y
+                        });
+                    }
+                }
+            });
+        }
+
+        function updatePlanetOrbits(deltaTime) {
+            universe.systems.forEach(system => {
+                system.planets.forEach(planet => {
+                    // Aktualizuj pozycję planety na orbicie
+                    planet.orbitAngle += planet.orbitSpeed * deltaTime * 0.016;
+                    planet.x = system.star.x + Math.cos(planet.orbitAngle) * planet.orbitRadius;
+                    planet.y = system.star.y + Math.sin(planet.orbitAngle) * planet.orbitRadius;
+                });
+            });
+        }
+
+        function checkPlanetClick(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+            
+            // Przekształć współrzędne myszy do świata gry
+            const worldX = (x - canvas.width / 2) / camera.zoom + camera.x;
+            const worldY = (y - canvas.height / 2) / camera.zoom + camera.y;
+            
+            // Sprawdź wszystkie planety
+            const allPlanets = [...universe.planets, ...universe.systems.flatMap(s => s.planets)];
+            
+            for (let i = 0; i < allPlanets.length; i++) {
+                const planet = allPlanets[i];
+                const dx = worldX - planet.x;
+                const dy = worldY - planet.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance <= planet.radius) {
+                    selectedPlanet = planet;
+                    showPlanetInfo(planet);
+                    return;
+                }
+            }
+            
+            // Jeśli kliknięto poza planetami, ukryj info
+            hidePlanetInfo();
+            selectedPlanet = null;
+        }
+
+        function showPlanetInfo(planet) {
+            const infoDiv = document.getElementById('planetInfo');
+            const nameSpan = document.getElementById('planetName');
+            const typeSpan = document.getElementById('planetType');
+            const resourcesSpan = document.getElementById('planetResources');
+            const levelSpan = document.getElementById('planetLevel');
+            
+            nameSpan.textContent = planet.name;
+            typeSpan.textContent = planet.type;
+            resourcesSpan.textContent = planet.resources.join(', ') || 'Brak';
+            levelSpan.textContent = planet.level;
+            
+            // Pokaż lub ukryj przycisk lądowania
+            const landButton = document.getElementById('landButton');
+            landButton.style.display = 'block';
+            
+            // Wyśrodkuj okno
+            infoDiv.style.display = 'block';
+        }
+
+        function hidePlanetInfo() {
+            document.getElementById('planetInfo').style.display = 'none';
+            selectedPlanet = null;
+        }
+
+        function landOnPlanet() {
+            if (!selectedPlanet) return;
+            
+            // Sprawdź czy statek ma wystarczająco paliwa
+            const distance = Math.sqrt(
+                Math.pow(selectedPlanet.x - ship.x, 2) + 
+                Math.pow(selectedPlanet.y - ship.y, 2)
+            );
+            const requiredFuel = distance * 0.1;
+            
+            if (ship.fuel < requiredFuel) {
+                alert('Nie masz wystarczająco paliwa, aby wylądować na tej planecie!');
+                return;
+            }
+            
+            // Zużyj paliwo
+            ship.fuel -= requiredFuel;
+            
+            // Ustaw planetę jako odwiedzoną
+            selectedPlanet.visited = true;
+            gameState.currentPlanet = selectedPlanet;
+            
+            // Zmień stan gry na "na planecie"
+            enterPlanetMode();
+            
+            hidePlanetInfo();
+        }
+
+        function enterPlanetMode() {
+            // Tutaj zaimplementujemy tryb eksploracji planety
+            alert(`Wylądowałeś na planecie ${selectedPlanet.name}! Tryb eksploracji planety zostanie zaimplementowany w kolejnej wersji.`);
+        }
+
+        // ==================== ZAPIS/ŁADOWANIE GRY ====================
+        function saveGame() {
+            const saveData = {
+                gameState: gameState,
+                ship: ship,
+                camera: camera,
+                seed: universe.seed || gameState.seed
+            };
+            
+            localStorage.setItem('cosmicFarmerSave', JSON.stringify(saveData));
+            alert('Gra została zapisana!');
+        }
+
+        function loadGame() {
+            const saveData = localStorage.getItem('cosmicFarmerSave');
+            if (!saveData) {
+                alert('Nie znaleziono zapisanego stanu gry!');
+                return;
+            }
+            
+            try {
+                const data = JSON.parse(saveData);
+                
+                // Przywróć stan gry
+                gameState = data.gameState || {};
+                ship = data.ship || {};
+                camera = data.camera || {};
+                
+                // Ponownie wygeneruj wszechświat z tym samym seedem
+                Math.seedrandom(data.seed);
+                generateUniverse();
+                
+                // Zaktualizuj UI
+                updateHUD();
+                updateInventory();
+                
+                alert('Gra została wczytana!');
+                document.getElementById('menuOverlay').style.display = 'none';
+            } catch (e) {
+                alert('Błąd podczas wczytywania gry: ' + e.message);
+            }
+        }
+
+        // ==================== MENU ====================
+        function toggleMenu() {
+            isPaused = !isPaused;
+            const menu = document.getElementById('menuOverlay');
+            menu.style.display = isPaused ? 'flex' : 'none';
+        }
+
+        function resumeGame() {
+            isPaused = false;
+            document.getElementById('menuOverlay').style.display = 'none';
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                canvas.requestFullscreen().catch(err => {
+                    alert('Błąd trybu pełnoekranowego: ' + err.message);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // ==================== PĘTLA GRY ====================
+        let frameCount = 0;
+        let fps = 0;
+        let lastFpsUpdate = 0;
+
+        function gameLoop(timestamp) {
+            if (!lastTime) {
+                lastTime = timestamp;
+            }
+            
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            // Aktualizuj FPS
+            frameCount++;
+            if (timestamp - lastFpsUpdate >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastFpsUpdate = timestamp;
+                document.getElementById('fpsCounter').textContent = `FPS: ${fps}`;
+            }
+            
+            // Aktualizuj logikę gry
+            update(deltaTime);
+            
+            // Renderuj
+            render();
+            
+            // Kontynuuj pętlę
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        // ==================== SEED RANDOM ====================
+        // Implementacja seedrandom dla proceduralnej generacji
+        Math.seedrandom = function(seed) {
+            const m = 0x80000000;
+            const a = 1103515245;
+            const c = 12345;
+            
+            let state = typeof seed === 'number' ? seed : 
+                       (seed && seed.length ? stringToSeed(seed) : Date.now());
+            
+            Math.random = function() {
+                state = (a * state + c) % m;
+                return state / (m - 1);
+            };
+            
+            return state;
+        };
+
+        function stringToSeed(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = (hash << 5) - hash + char;
+                hash = hash & hash; // Konwersja na 32-bit
+            }
+            return Math.abs(hash);
+        }
+
+        // ==================== ROZPOCZĘCIE GRY ====================
+        window.onload = init;
+        
+        // Obsługa zamknięcia okna
+        window.onbeforeunload = function() {
+            if (gameLoopId) {
+                cancelAnimationFrame(gameLoopId);
+            }
+        };
+    </script>
+</body>
+</html>
