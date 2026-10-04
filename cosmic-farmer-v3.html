@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Cosmic Farmer v3</title>
+<style>
+body{margin:0;padding:0;background:#000;overflow:hidden;font-family:Arial;touch-action:none;}
+canvas{display:block;background:#000;}
+#msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;background:rgba(0,0,0,0.8);padding:20px;border-radius:10px;text-align:center;z-index:100;}
+#hud{position:absolute;bottom:10px;left:10px;color:#fff;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;}
+#inv{position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;display:grid;grid-template-columns:repeat(5,1fr);gap:5px;}
+.slot{width:32px;height:32px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);text-align:center;font-size:20px;cursor:pointer;}
+#menu{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;justify-content:center;align-items:center;flex-direction:column;z-index:1000;}
+.btn{background:rgba(255,255,255,0.2);border:1px solid #555;color:#fff;padding:10px 20px;margin:5px;cursor:pointer;border-radius:5px;}
+.btn:hover{background:rgba(255,255,255,0.3);}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="msg">Witaj! Zbieraj zasoby (WASD - poruszanie, Spacja - zbieranie)</div>
+<div id="hud">💰: <span id="money">100</span> | ⚡: <span id="energy">100</span> | 🔨: <span id="tool">Brak</span></div>
+<div id="inv"></div>
+<div id="menu" style="display:none;">
+<h2>Cosmic Farmer v3</h2>
+<button class="btn" onclick="resume()">Wznów</button>
+<button class="btn" onclick="newGame()">Nowa gra</button>
+<button class="btn" onclick="help()">Pomoc</button>
+</div>
+
+<script>
+// KONFIGURACJA
+var CFG = {
+    RES: {
+        drewo: {n:"Drewno", i:"🌳", v:10, m:99, t:1000},
+        kamien: {n:"Kamień", i:"🪨", v:5, m:99, t:1500},
+        zboze: {n:"Zboże", i:"🌾", v:20, m:99, t:800}
+    },
+    TOOLS: [
+        {id:"motyka", n:"Motyka", c:50, e:1.0},
+        {id:"siekiera", n:"Siekiera", c:75, e:1.5}
+    ],
+    PLAYER: {SPEED:4, ENERGY:100, REGEN:0.2}
+};
+
+// ZMIENNE GLOBALNE
+var c, ctx, GS, PL, IN, CAM, PR = [], FG = [], SEL_INV = null, COLLECT = null, COLLECT_T = 0, PAUSED = false, GMODE = 'planet', GLOOP = null;
+
+// INICJALIZACJA
+function init() {
+    c = document.getElementById('c');
+    if (!c) { showMsg("Brak canvas!"); return; }
+    
+    ctx = c.getContext('2d');
+    resize();
+    window.addEventListener('resize', resize);
+    initInput();
+    initUI();
+    newGame();
+    
+    GLOOP = requestAnimationFrame(gameLoop);
+    showMsg("Witaj na Ziemi! WASD - poruszanie, Spacja - zbieranie");
+}
+
+function resize() {
+    if (!c) return;
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    c.width = w;
+    c.height = h;
+}
+
+function initInput() {
+    IN = {keys: {}, touch: {x: 0, y: 0, active: false}};
+    
+    window.addEventListener('keydown', function(e) {
+        IN.keys[e.code] = true;
+        if (e.code === 'Escape') toggleMenu();
+        if (e.code === 'Space') attemptCollect();
+        if (e.code.startsWith('Digit')) {
+            var idx = parseInt(e.code.replace('Digit', '')) - 1;
+            if (idx >= 0 && idx < 20) selInv(idx);
+        }
+    });
+    
+    window.addEventListener('keyup', function(e) {
+        IN.keys[e.code] = false;
+    });
+    
+    c.addEventListener('touchstart', function(e) {
+        e.preventDefault();
+        var rect = c.getBoundingClientRect();
+        var t = e.touches[0];
+        IN.touch.x = t.clientX - rect.left;
+        IN.touch.y = t.clientY - rect.top;
+        IN.touch.active = true;
+    });
+    
+    c.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        IN.touch.active = false;
+    });
+    
+    c.addEventListener('touchmove', function(e) {
+        e.preventDefault();
+        var rect = c.getBoundingClientRect();
+        var t = e.touches[0];
+        IN.touch.x = t.clientX - rect.left;
+        IN.touch.y = t.clientY - rect.top;
+    });
+}
+
+function initUI() {
+    var inv = document.getElementById('inv');
+    if (inv) {
+        inv.innerHTML = '';
+        for (var i = 0; i < 20; i++) {
+            var slot = document.createElement('div');
+            slot.className = 'slot';
+            slot.id = 'slot-' + i;
+            slot.onclick = (function(idx) { return function() { selInv(idx); }; })(i);
+            inv.appendChild(slot);
+        }
+    }
+}
+
+// NOWA GRA
+function newGame() {
+    GS = {money: 100, inv: []};
+    PL = {x: 0, y: 0, energy: CFG.PLAYER.ENERGY, maxEnergy: CFG.PLAYER.ENERGY, currentTool: null, speed: CFG.PLAYER.SPEED};
+    CAM = {x: 0, y: 0, zoom: 1};
+    PR = [];
+    FG = [];
+    GMODE = 'planet';
+    PAUSED = false;
+    SEL_INV = null;
+    COLLECT = null;
+    COLLECT_T = 0;
+    
+    // Generuj zasoby na planecie
+    for (var i = 0; i < 15; i++) {
+        var angle = Math.random() * Math.PI * 2;
+        var distance = 50 + Math.random() * 200;
+        var resTypes = ['drewo', 'kamien', 'zboze'];
+        PR.push({
+            x: Math.cos(angle) * distance,
+            y: Math.sin(angle) * distance,
+            type: resTypes[Math.floor(Math.random() * resTypes.length)]
+        });
+    }
+    
+    updateHUD();
+    updateInv();
+}
+
+// RENDEROWANIE
+function render() {
+    if (!c || !ctx) return;
+    
+    // Czyszczenie
+    ctx.fillStyle = '#1a3c1a';
+    ctx.fillRect(0, 0, c.width, c.height);
+    
+    // Rysuj zasoby
+    drawResources();
+    
+    // Rysuj gracza
+    drawPlayer();
+    
+    // Rysuj zbieranie
+    if (COLLECT) drawCollecting();
+}
+
+function drawResources() {
+    PR.forEach(function(r) {
+        var dx = r.x - PL.x;
+        var dy = r.y - PL.y;
+        var distance = Math.sqrt(dx*dx + dy*dy);
+        
+        if (distance > 300) return;
+        
+        var size = Math.max(16, 32 - distance/20);
+        var res = CFG.RES[r.type];
+        if (res) {
+            ctx.font = size + 'px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(res.i, r.x + c.width/2 - PL.x, r.y + c.height/2 - PL.y);
+        }
+    });
+}
+
+function drawPlayer() {
+    ctx.save();
+    ctx.translate(c.width/2, c.height/2);
+    ctx.translate(-PL.x, -PL.y);
+    
+    // Ciało gracza
+    ctx.fillStyle = '#1a5c80';
+    ctx.beginPath();
+    ctx.arc(0, -5, 8, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Głowa
+    ctx.fillStyle = '#f5d5a0';
+    ctx.beginPath();
+    ctx.arc(0, -15, 5, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Nogi
+    ctx.fillStyle = '#3a3a80';
+    ctx.fillRect(-3, 5, 6, 10);
+    
+    // Ręce
+    ctx.fillRect(-10, -5, 8, 3);
+    ctx.fillRect(2, -5, 8, 3);
+    
+    // Narzędzie
+    if (PL.currentTool) {
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('🔨', 12, -10);
+    }
+    
+    // Wskaźnik kierunku
+    ctx.strokeStyle = '#ff0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(20, 0);
+    ctx.stroke();
+    
+    ctx.restore();
+}
+
+function drawCollecting() {
+    if (!COLLECT) return;
+    var res = CFG.RES[COLLECT.type];
+    if (!res) return;
+    
+    var progress = COLLECT_T / (res.t / getToolEff());
+    
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(c.width/2 - 100, c.height/2 - 20, 200, 40);
+    
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Zbieranie: ' + res.i + ' ' + res.n, c.width/2, c.height/2);
+    
+    ctx.fillStyle = '#0f0';
+    ctx.fillRect(c.width/2 - 90, c.height/2 + 10, 180 * progress, 10);
+    
+    ctx.strokeStyle = '#fff';
+    ctx.strokeRect(c.width/2 - 90, c.height/2 + 10, 180, 10);
+}
+
+// LOGIKA
+function update(deltaTime) {
+    if (PAUSED) return;
+    
+    handlePlayer(deltaTime);
+    
+    // Regeneracja energii
+    if (PL.energy < PL.maxEnergy) {
+        PL.energy = Math.min(PL.energy + CFG.PLAYER.REGEN * deltaTime * 0.016, PL.maxEnergy);
+    }
+    
+    // Zbieranie
+    if (COLLECT) {
+        var res = CFG.RES[COLLECT.type];
+        if (res) {
+            COLLECT_T += deltaTime;
+            if (COLLECT_T >= res.t / getToolEff()) {
+                addInv(COLLECT.type, 1, 'resource');
+                var idx = PR.indexOf(COLLECT);
+                if (idx > -1) PR.splice(idx, 1);
+                
+                // Nowy zasób
+                var angle = Math.random() * Math.PI * 2;
+                var distance = 50 + Math.random() * 200;
+                PR.push({
+                    x: Math.cos(angle) * distance,
+                    y: Math.sin(angle) * distance,
+                    type: ['drewo', 'kamien', 'zboze'][Math.floor(Math.random() * 3)]
+                });
+                
+                COLLECT = null;
+                COLLECT_T = 0;
+                showMsg('Zebrano: ' + res.i + ' ' + res.n);
+            }
+        }
+    }
+    
+    updateHUD();
+}
+
+function handlePlayer(deltaTime) {
+    var moveSpeed = PL.speed * deltaTime * 0.016;
+    
+    if (IN.keys['KeyW'] || IN.keys['ArrowUp'] || IN.touch.active) {
+        PL.y -= moveSpeed;
+    }
+    if (IN.keys['KeyS'] || IN.keys['ArrowDown']) {
+        PL.y += moveSpeed;
+    }
+    if (IN.keys['KeyA'] || IN.keys['ArrowLeft']) {
+        PL.x -= moveSpeed;
+    }
+    if (IN.keys['KeyD'] || IN.keys['ArrowRight']) {
+        PL.x += moveSpeed;
+    }
+    
+    // Touch movement
+    if (IN.touch.active) {
+        var centerX = c.width / 2;
+        var centerY = c.height / 2;
+        var dx = IN.touch.x - centerX;
+        var dy = IN.touch.y - centerY;
+        var distance = Math.sqrt(dx*dx + dy*dy);
+        if (distance > 10) {
+            PL.x += (dx / distance) * moveSpeed * 2;
+            PL.y += (dy / distance) * moveSpeed * 2;
+        }
+    }
+    
+    // Ograniczenia
+    PL.x = Math.max(-500, Math.min(500, PL.x));
+    PL.y = Math.max(-500, Math.min(500, PL.y));
+}
+
+function attemptCollect() {
+    for (var i = 0; i < PR.length; i++) {
+        var r = PR[i];
+        var dx = r.x - PL.x;
+        var dy = r.y - PL.y;
+        var distance = Math.sqrt(dx*dx + dy*dy);
+        
+        if (distance <= 40) {
+            COLLECT = r;
+            COLLECT_T = 0;
+            return;
+        }
+    }
+}
+
+function getToolEff() {
+    if (!PL.currentTool) return 1.0;
+    var tool = CFG.TOOLS.find(function(t) { return t.id === PL.currentTool; });
+    return tool ? tool.e : 1.0;
+}
+
+// INWENTARZ
+function selInv(idx) {
+    SEL_INV = idx;
+    updateInv();
+    
+    var item = GS.inv[idx];
+    if (item && item.type === 'tool') {
+        PL.currentTool = item.id;
+        updateHUD();
+        showMsg('Wybrano: ' + CFG.TOOLS.find(function(t) { return t.id === item.id; }).n);
+    }
+}
+
+function addInv(id, amt, type) {
+    var existing = GS.inv.find(function(item) { 
+        return item && item.id === id && item.type === type; 
+    });
+    
+    if (existing) {
+        var res = CFG.RES[id];
+        var maxStack = res ? res.m : 99;
+        if (existing.amount + amt <= maxStack) {
+            existing.amount += amt;
+        } else {
+            var remaining = amt - (maxStack - existing.amount);
+            existing.amount = maxStack;
+            addInv(id, remaining, type);
+        }
+    } else {
+        var emptySlot = GS.inv.findIndex(function(item) { return item === null; });
+        if (emptySlot !== -1) {
+            GS.inv[emptySlot] = {id: id, type: type, amount: amt};
+        } else {
+            showMsg('Inwentarz pełny!');
+        }
+    }
+    updateInv();
+}
+
+function updateInv() {
+    for (var i = 0; i < 20; i++) {
+        var slot = document.getElementById('slot-' + i);
+        if (slot) {
+            var item = GS.inv[i];
+            if (item) {
+                if (item.type === 'resource') {
+                    var res = CFG.RES[item.id];
+                    slot.textContent = res ? res.i : '?';
+                    slot.title = res.n + ': ' + item.amount;
+                } else if (item.type === 'tool') {
+                    slot.textContent = '🔨';
+                    slot.title = CFG.TOOLS.find(function(t) { return t.id === item.id; }).n;
+                }
+            } else {
+                slot.textContent = '';
+                slot.title = '';
+            }
+        }
+    }
+}
+
+function updateHUD() {
+    var money = document.getElementById('money');
+    var energy = document.getElementById('energy');
+    var tool = document.getElementById('tool');
+    
+    if (money) money.textContent = GS.money;
+    if (energy) energy.textContent = Math.round(PL.energy);
+    if (tool) tool.textContent = PL.currentTool ? CFG.TOOLS.find(function(t) { return t.id === PL.currentTool; }).n : 'Brak';
+}
+
+// MENU
+function toggleMenu() {
+    PAUSED = !PAUSED;
+    var menu = document.getElementById('menu');
+    if (menu) menu.style.display = PAUSED ? 'flex' : 'none';
+}
+
+function resume() {
+    PAUSED = false;
+    var menu = document.getElementById('menu');
+    if (menu) menu.style.display = 'none';
+}
+
+function help() {
+    showMsg('WASD/Strzałki - poruszanie, Spacja - zbieranie, ESC - menu, 1-9 - inwentarz', 5000);
+}
+
+function showMsg(text, duration) {
+    var msg = document.getElementById('msg');
+    if (msg) {
+        msg.textContent = text;
+        msg.style.display = 'block';
+        if (!duration) duration = 2000;
+        setTimeout(function() {
+            if (msg) msg.style.display = 'none';
+        }, duration);
+    }
+}
+
+// PĘTLA GRY
+var lastTime = 0;
+function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var deltaTime = timestamp - lastTime;
+    lastTime = timestamp;
+    
+    update(deltaTime);
+    render();
+    
+    GLOOP = requestAnimationFrame(gameLoop);
+}
+
+// ROZPOCZĘCIE
+window.onload = init;
+window.onbeforeunload = function() {
+    if (GLOOP) cancelAnimationFrame(GLOOP);
+};
+</script>
+</body>
+</html>
