@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Cosmic Farmer v2</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; touch-action: none; font-family: Arial; }
+#gameCanvas { display: block; background: #000; image-rendering: pixelated; }
+#ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+#hud { position: absolute; bottom: 10px; left: 10px; color: #fff; font-size: 12px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; pointer-events: auto; }
+#inventory { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; pointer-events: auto; }
+.inv-slot { width: 32px; height: 32px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; }
+#menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: none; flex-direction: column; justify-content: center; align-items: center; pointer-events: auto; z-index: 100; }
+#shipMenu { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px; color: #fff; display: none; pointer-events: auto; z-index: 100; }
+#shopUI { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px; color: #fff; display: none; pointer-events: auto; z-index: 100; max-width: 80%; max-height: 80%; overflow: auto; }
+#farmUI { position: absolute; top: 10%; left: 10%; background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px; color: #fff; display: none; pointer-events: auto; z-index: 100; }
+.btn { background: rgba(255,255,255,0.2); border: 1px solid #555; color: #fff; padding: 8px 15px; margin: 5px; cursor: pointer; border-radius: 5px; pointer-events: auto; }
+.btn:hover { background: rgba(255,255,255,0.3); }
+#msg { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; display: none; pointer-events: none; z-index: 200; text-align: center; }
+#loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #fff; font-size: 18px; }
+#fps { position: absolute; top: 10px; left: 10px; color: #0f0; font-size: 10px; pointer-events: none; }
+@media (max-width: 600px) { #inventory { grid-template-columns: repeat(3, 1fr); bottom: 70px; right: 10px; top: auto; } #hud { font-size: 10px; } }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+<div id="fps">FPS: 0</div>
+<div id="hud"><div>💰: <span id="money">100</span></div><div>⚡: <span id="energy">100</span>/100</div><div>🔨: <span id="tool">Brak</span></div></div>
+<div id="inventory"></div>
+<div id="menu">
+<h2>Cosmic Farmer v2</h2>
+<button class="btn" onclick="resume()">Wznów</button>
+<button class="btn" onclick="newGame()">Nowa gra</button>
+<button class="btn" onclick="save()">Zapisz</button>
+<button class="btn" onclick="load()">Wczytaj</button>
+<button class="btn" onclick="help()">Pomoc</button>
+</div>
+<div id="shipMenu">
+<h3>Statek</h3>
+<div>Paliwo: <span id="shipFuel">100</span>/<span id="shipMaxFuel">100</span></div>
+<button class="btn" onclick="launch()">Wyrusz</button>
+<button class="btn" onclick="closeShipMenu()">Zamknij</button>
+</div>
+<div id="shopUI"><h2>Sklep</h2><div id="shopItems"></div><button class="btn" onclick="closeShop()">Zamknij</button></div>
+<div id="farmUI"><h2>Farma</h2><div id="seeds"></div><div id="plots"></div><button class="btn" onclick="toggleFarm()">Zamknij</button></div>
+<div id="msg"></div>
+<div id="loading">Ładowanie...</div>
+</div>
+
+<script>
+const CFG = {
+W:800,H:600,SCALE:true,U_SIZE:5000,STAR_D:0.0001,PLANET_D:0.00005,SHIP_SPEED:8,ROT_SPEED:0.08,FUEL_USE:0.05,MAX_FUEL:500,
+P_MIN_R:12,P_MAX_R:30,ORBIT_MIN:100,ORBIT_MAX:300,
+PLANETS:[{n:"Ziemska",c:[50,150,50],r:["drewo","kamien","zboze"],f:true,t:"grass"},{n:"Lodowa",c:[150,200,255],r:["lod","krystal"],f:false,t:"ice"},{n:"Wulkaniczna",c:[200,100,50],r:["metal","siarka"],f:false,t:"lava"},{n:"Pustynna",c:[200,180,100],r:["piasek","szklo"],f:true,t:"sand"},{n:"Leśna",c:[30,100,30],r:["drewo","zioła","owoc"],f:true,t:"forest"}],
+RES:{drewo:{n:"Drewno",i:"🌳",v:10,m:99,t:1000},kamien:{n:"Kamień",i:"🪨",v:5,m:99,t:1500},zboze:{n:"Zboże",i:"🌾",v:20,m:99,t:800},lod:{n:"Lód",i:"❄️",v:15,m:99,t:1200},krystal:{n:"Kryształ",i:"💎",v:50,m:50,t:2000},metal:{n:"Metal",i:"⚙️",v:30,m:50,t:2500},siarka:{n:"Siarka",i:"🔥",v:25,m:99,t:1800},piasek:{n:"Piasek",i:"🏖️",v:8,m:99,t:600},szklo:{n:"Szkło",i:"💎",v:15,m:50,t:1500},zioła:{n:"Zioła",i:"🌿",v:40,m:50,t:1000},owoc:{n:"Owoc",i:"🍎",v:35,m:50,t:900},grzyb:{n:"Grzyb",i:"🍄",v:22,m:50,t:1000}},
+UPGRADES:[{id:"e1",n:"Silnik",c:100,s:2},{id:"f1",n:"Zbiornik",c:200,f:100},{id:"s1",n:"Skaner",c:150,r:100}],
+CROPS:[{id:"zboze",n:"Zboże",g:3000,v:20,s:5,y:{min:1,max:3},i:"🌾"},{id:"zioła",n:"Zioła",g:5000,v:40,s:10,y:{min:1,max:2},i:"🌿"},{id:"owoc",n:"Owoce",g:8000,v:35,s:15,y:{min:1,max:2},i:"🍎"}],
+TOOLS:[{id:"motyka",n:"Motyka",c:50,e:1.0},{id:"siekiera",n:"Siekiera",c:75,e:1.5},{id:"kilof",n:"Kilof",c:100,e:2.0}],
+PLAYER:{SPEED:4,ENERGY:100,REGEN:0.2},FARM:{SIZE:40,COLS:6,ROWS:3}
+};
+
+let cvs,ctx,GS={},U={},SHIP={},CAM={},IN={},PL={},LT=0,PAUSED=false,SEL_P=null,SEL_INV=null,COLL=null,COLL_T=0,GLOOP=null,GMODE='planet',FG=[],PR=[],SEL_CROP=null;
+
+Math.seedrandom=function(s){const m=0x80000000,a=1103515245,c=12345;let st=typeof s==='number'?s:s&&s.length?stringToSeed(s):Date.now();Math.random=function(){st=(a*st+c)%m;return st/(m-1);};return st;};
+function stringToSeed(s){let h=0;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);h=(h<<5)-h+c;h=h&h;}return Math.abs(h);}
+
+function msg(m,d=2000){const e=document.getElementById('msg');if(e){e.textContent=m;e.style.display='block';setTimeout(()=>{if(e)e.style.display='none';},d);}}
+function getToolEff(){if(!PL.currentTool)return 1.0;const t=CFG.TOOLS.find(x=>x.id===PL.currentTool);return t?t.e:1.0;}
+
+function initUI(){
+const inv=document.getElementById('inventory');if(inv){inv.innerHTML='';for(let i=0;i<20;i++){const s=document.createElement('div');s.className='inv-slot';s.id=`inv-${i}`;s.onclick=()=>selInv(i);const a=document.createElement('span');a.className='amt';a.id=`amt-${i}`;s.appendChild(a);inv.appendChild(s);}}
+const shop=document.getElementById('shopItems');if(shop){shop.innerHTML='';CFG.UPGRADES.forEach(u=>{const d=document.createElement('div');d.innerHTML=`<div><strong>${u.n}</strong> (${u.c}💰)</div><button class="btn" onclick="buy('u','${u.id}')">Kup</button>`;shop.appendChild(d);});CFG.CROPS.forEach(c=>{const d=document.createElement('div');d.innerHTML=`<div><strong>${c.i} ${c.n}</strong> (${c.s}💰)</div><button class="btn" onclick="buy('s','${c.id}')">Kup 10</button>`;shop.appendChild(d);});CFG.TOOLS.forEach(t=>{const d=document.createElement('div');d.innerHTML=`<div><strong>${t.n}</strong> (${t.c}💰)</div><button class="btn" onclick="buy('t','${t.id}')">Kup</button>`;shop.appendChild(d);});}
+const seeds=document.getElementById('seeds');if(seeds){seeds.innerHTML='';for(let i=0;i<CFG.CROPS.length;i++){const s=document.createElement('div');s.className='inv-slot';s.id=`seed-${i}`;s.onclick=()=>selSeed(i);seeds.appendChild(s);}}
+const plots=document.getElementById('plots');if(plots){plots.innerHTML='';for(let r=0;r<CFG.FARM.ROWS;r++){for(let c=0;c<CFG.FARM.COLS;c++){const p=document.createElement('div');p.className='inv-slot';p.id=`plot-${r}-${c}`;p.onclick=()=>selPlot(r,c);plots.appendChild(p);}}}
+}
+
+function newGame(){
+const seed=Date.now().toString().split('').reverse().join('');Math.seedrandom(seed);
+GS={seed,money:100,day:1,inv:[],disc:[],upgrades:[],curPlanet:null,stats:{p:0,r:0,d:0}};
+SHIP={x:0,y:0,a:0,speed:CFG.SHIP_SPEED,fuel:CFG.MAX_FUEL/2,maxFuel:CFG.MAX_FUEL,scanning:false,scanRange:200};
+CAM={x:0,y:0,z:1};PL={x:0,y:0,energy:CFG.PLAYER.ENERGY,maxEnergy:CFG.PLAYER.ENERGY,currentTool:null,speed:CFG.PLAYER.SPEED};
+generateUniverse();
+PAUSED=false;SEL_P=null;SEL_INV=null;GMODE='planet';FG=[];PR=[];SEL_CROP=null;
+const menu=document.getElementById('menu');if(menu)menu.style.display='none';
+const shipMenu=document.getElementById('shipMenu');if(shipMenu)shipMenu.style.display='none';
+for(let i=0;i<CFG.FARM.ROWS;i++){FG[i]=[];for(let j=0;j<CFG.FARM.COLS;j++)FG[i][j]=null;}
+startOnPlanet();updateHUD();updateInv();
+}
+
+function startOnPlanet(){
+GMODE='planet';const sp={id:'start',name:'Ziemia',type:'Ziemska',color:[50,150,50],resources:['drewo','kamien','zboze'],farmable:true,terrain:'grass',level:1,x:0,y:0};
+GS.currentPlanet=sp;PL.x=0;PL.y=0;CAM.x=0;CAM.y=0;PR=[];
+for(let i=0;i<15;i++){const a=Math.random()*Math.PI*2;const d=50+Math.random()*200;PR.push({x:Math.cos(a)*d,y:Math.sin(a)*d,type:sp.resources[Math.floor(Math.random()*sp.resources.length)]});}
+const hud=document.getElementById('hud');const inv=document.getElementById('inventory');const pm=document.getElementById('planetModeUI');
+if(hud)hud.style.display='block';if(inv)inv.style.display='block';
+msg('Witaj na Ziemi! WASD - poruszanie, Spacja - zbieranie');
+}
+
+function generateUniverse(){
+U={stars:[],planets:[],systems:[]};
+const sc=Math.floor(CFG.U_SIZE*CFG.U_SIZE*CFG.STAR_D);for(let i=0;i<sc;i++)U.stars.push({id:`s-${Math.random().toString(36).substr(2,5)}`,x:(Math.sqrt(Math.random())*CFG.U_SIZE*0.45)*Math.cos(Math.random()*Math.PI*2),y:(Math.sqrt(Math.random())*CFG.U_SIZE*0.45)*Math.sin(Math.random()*Math.PI*2),size:1+Math.random(),brightness:0.5+Math.random()*0.5,color:[[255,255,200],[255,200,150],[255,180,100],[200,220,255],[255,255,255]][Math.floor(Math.random()*5)],twinkle:Math.random()*Math.PI*2,twinkleSpeed:0.005+Math.random()*0.005});
+const pc=Math.floor(CFG.U_SIZE*CFG.U_SIZE*CFG.PLANET_D);for(let i=0;i<pc;i++)U.planets.push(generatePlanet());
+generateSystems();
+}
+
+function generatePlanet(){
+const t=CFG.PLANETS[Math.floor(Math.random()*CFG.PLANETS.length)];
+const d=CFG.ORBIT_MIN+Math.random()*(CFG.U_SIZE*0.4-CFG.ORBIT_MIN);
+const a=Math.random()*Math.PI*2;
+return {id:`p-${Math.random().toString(36).substr(2,5)}`,x:d*Math.cos(a),y:d*Math.sin(a),radius:CFG.P_MIN_R+Math.random()*(CFG.P_MAX_R-CFG.P_MIN_R),type:t.n,color:t.c,resources:t.r,farmable:t.f,level:1+Math.floor(Math.random()*2),discovered:false,visited:false,name:`${['Alfa','Beta','Gamma','Delta'][Math.floor(Math.random()*4)]} ${t.n}-${Math.floor(Math.random()*10)}`,terrain:t.t,orbitRadius:d,orbitAngle:a,orbitSpeed:(0.001+Math.random()*0.002)*(Math.random()>0.5?1:-1)};
+}
+
+function generateSystems(){
+const sys=[];U.stars.forEach(star=>{const sp=[];for(let i=0;i<Math.floor(Math.random()*2)+1;i++){const np=U.planets.filter(p=>{const dx=p.x-star.x;const dy=p.y-star.y;return Math.sqrt(dx*dx+dy*dy)<300;});if(np.length>0){const p=np[Math.floor(Math.random()*np.length)];sp.push(p);const idx=U.planets.indexOf(p);if(idx>-1)U.planets.splice(idx,1);}}if(sp.length>0)sys.push({star,planets:sp});});U.systems=sys;
+}
+
+function render(){
+if(!cvs||!ctx)return;ctx.fillStyle='#000';ctx.fillRect(0,0,cvs.width,cvs.height);
+if(GMODE==='space')renderSpace();else if(GMODE==='planet')renderPlanet();
+if(GMODE==='space')drawHUD();if(COLL)drawCollecting();
+}
+
+function renderSpace(){
+ctx.save();ctx.translate(cvs.width/2,cvs.height/2);ctx.scale(CAM.z,CAM.z);ctx.translate(-CAM.x,-CAM.y);
+drawNebula();drawStars();drawSystems();drawPlanets();drawShip();if(SHIP.scanning)drawScanner();ctx.restore();
+}
+
+function renderPlanet(){
+const cp=GS.currentPlanet;if(!cp)return;ctx.save();ctx.translate(cvs.width/2,cvs.height/2);ctx.scale(CAM.z,CAM.z);ctx.translate(-PL.x,-PL.y);
+drawPlanetBG(cp);drawResources();if(cp.farmable)drawFarm();drawPlayer();if(PL.currentTool)drawToolInd();ctx.restore();
+}
+
+function drawNebula(){
+const g=ctx.createRadialGradient(CAM.x,CAM.y,0,CAM.x,CAM.y,CFG.U_SIZE*0.5);g.addColorStop(0,'#0a0a1a');g.addColorStop(0.5,'#050510');g.addColorStop(1,'#000000');ctx.fillStyle=g;ctx.fillRect(CAM.x-CFG.U_SIZE/2,CAM.y-CFG.U_SIZE/2,CFG.U_SIZE,CFG.U_SIZE);
+}
+
+function drawStars(){
+U.stars.forEach(s=>{const dx=s.x-CAM.x;const dy=s.y-CAM.y;const d=Math.sqrt(dx*dx+dy*dy);if(d>CFG.U_SIZE/2)return;
+const t=Math.sin(Date.now()*s.twinkleSpeed+s.twinkle)*0.3+0.7;const b=s.brightness*t;const sz=s.size*Math.max(0.3,1-d/(CFG.U_SIZE/2));
+const col=`rgba(${s.color[0]},${s.color[1]},${s.color[2]},${b})`;const g=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,sz*2);
+g.addColorStop(0,col);g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,sz,0,Math.PI*2);ctx.fill();});
+}
+
+function drawSystems(){
+U.systems.forEach(sys=>{sys.planets.forEach(p=>{const dx=p.x-sys.star.x;const dy=p.y-sys.star.y;const or=Math.sqrt(dx*dx+dy*dy);
+const sd=Math.sqrt(Math.pow(sys.star.x-CAM.x,2)+Math.pow(sys.star.y-CAM.y,2));if(sd<500){ctx.beginPath();ctx.arc(sys.star.x,sys.star.y,or,0,Math.PI*2);ctx.strokeStyle='rgba(100,100,255,0.1)';ctx.stroke();}});});
+}
+
+function drawPlanets(){
+const all=[...U.planets,...U.systems.flatMap(s=>s.planets)];all.forEach(p=>{const dx=p.x-CAM.x;const dy=p.y-CAM.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d>CFG.U_SIZE/2)return;const sr=p.radius*Math.max(0.3,1-d/(CFG.U_SIZE/2));
+ctx.beginPath();ctx.arc(p.x+2,p.y+2,sr,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fill();
+ctx.beginPath();ctx.arc(p.x,p.y,sr,0,Math.PI*2);ctx.fillStyle=`rgb(${p.color[0]},${p.color[1]},${p.color[2]})`;ctx.fill();
+if(SEL_P&&SEL_P.id===p.id){ctx.beginPath();ctx.arc(p.x,p.y,sr+5,0,Math.PI*2);ctx.strokeStyle='#ffff00';ctx.lineWidth=2;ctx.stroke();}
+if(p.discovered){ctx.fillStyle='#fff';ctx.font=`${Math.max(8,12-d/100)}px Arial`;ctx.textAlign='center';ctx.fillText(p.name,p.x,p.y-sr-10);}});
+}
+
+function drawShip(){
+const x=SHIP.x;const y=SHIP.y;
+if(IN.keys['KeyW']||IN.keys['ArrowUp']||IN.touch.active){ctx.save();ctx.translate(x,y);ctx.rotate(SHIP.a);
+ctx.beginPath();ctx.moveTo(-10,0);ctx.lineTo(-15-Math.random()*3,-3-Math.random());ctx.lineTo(-12-Math.random()*2,0);ctx.lineTo(-15-Math.random()*3,3+Math.random());ctx.closePath();ctx.fillStyle='rgba(255,150,50,0.8)';ctx.fill();ctx.restore();}
+ctx.save();ctx.translate(x,y);ctx.rotate(SHIP.a);ctx.beginPath();ctx.moveTo(20,0);ctx.lineTo(-10,-8);ctx.lineTo(-15,0);ctx.lineTo(-10,8);ctx.closePath();ctx.fillStyle='#555';ctx.fill();ctx.strokeStyle='#888';ctx.lineWidth=1;ctx.stroke();
+ctx.beginPath();ctx.arc(-5,0,5,0,Math.PI*2);ctx.fillStyle='#77a';ctx.fill();
+ctx.beginPath();ctx.moveTo(20,0);ctx.lineTo(25,-3);ctx.lineTo(25,3);ctx.closePath();ctx.fillStyle='#333';ctx.fill();ctx.restore();
+}
+
+function drawScanner(){
+ctx.save();ctx.translate(SHIP.x,SHIP.y);ctx.beginPath();ctx.arc(0,0,SHIP.scanRange,0,Math.PI*2);ctx.strokeStyle='rgba(0,255,255,0.2)';ctx.lineWidth=1;ctx.stroke();
+const sa=Date.now()*0.01;ctx.beginPath();ctx.arc(0,0,SHIP.scanRange,sa,sa+Math.PI/6);ctx.strokeStyle='rgba(0,255,255,0.5)';ctx.lineWidth=2;ctx.stroke();ctx.restore();
+}
+
+function drawPlanetBG(p){
+switch(p.terrain){case'grass':ctx.fillStyle='#2a5c2a';break;case'ice':ctx.fillStyle='#a0d0e0';break;case'lava':ctx.fillStyle='#5c2a1a';break;case'sand':ctx.fillStyle='#d0b080';break;case'forest':ctx.fillStyle='#1a3c1a';break;default:ctx.fillStyle='#4a4a4a';}
+ctx.fillRect(-1000,-1000,2000,2000);
+}
+
+function drawResources(){
+PR.forEach(r=>{const dx=r.x-PL.x;const dy=r.y-PL.y;const d=Math.sqrt(dx*dx+dy*dy);if(d>300)return;
+const sz=Math.max(16,32-d/20);const rc=CFG.RES[r.type];if(rc){ctx.font=`${sz}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(rc.i,r.x,r.y);
+if(COLL&&COLL.x===r.x&&COLL.y===r.y){const prog=COLL_T/(rc.t/getToolEff());ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(r.x-20,r.y-10,40,5);ctx.fillStyle='#0f0';ctx.fillRect(r.x-20,r.y-10,40*prog,5);}}}});
+}
+
+function drawFarm(){
+const cp=GS.currentPlanet;if(!cp||!cp.farmable)return;
+for(let r=0;r<CFG.FARM.ROWS;r++){for(let c=0;c<CFG.FARM.COLS;c++){const plot=FG[r]?.[c];
+const x=c*CFG.FARM.SIZE-(CFG.FARM.COLS*CFG.FARM.SIZE)/2+50;const y=r*CFG.FARM.SIZE-(CFG.FARM.ROWS*CFG.FARM.SIZE)/2+50;
+ctx.fillStyle='#8B4513';ctx.fillRect(x,y,CFG.FARM.SIZE,CFG.FARM.SIZE);ctx.strokeStyle='#000';ctx.strokeRect(x,y,CFG.FARM.SIZE,CFG.FARM.SIZE);
+if(plot&&plot.crop){const crop=CFG.CROPS.find(c=>c.id===plot.crop);if(crop){const gp=plot.growth/crop.g;
+let col=gp<0.33?'#228B22':(gp<0.66?'#32CD32':'#9ACD32');ctx.fillStyle=col;ctx.beginPath();
+ctx.arc(x+CFG.FARM.SIZE/2,y+CFG.FARM.SIZE/2,CFG.FARM.SIZE/4*gp,0,Math.PI*2);ctx.fill();}}}}
+}
+
+function drawPlayer(){
+ctx.save();ctx.translate(PL.x,PL.y);ctx.fillStyle='#1a5c80';ctx.beginPath();ctx.arc(0,-5,8,0,Math.PI*2);ctx.fill();
+ctx.fillStyle='#f5d5a0';ctx.beginPath();ctx.arc(0,-15,5,0,Math.PI*2);ctx.fill();
+ctx.fillStyle='#3a3a80';ctx.fillRect(-3,5,6,10);ctx.fillRect(-10,-5,8,3);ctx.fillRect(2,-5,8,3);
+if(PL.currentTool){ctx.font='12px Arial';ctx.textAlign='center';ctx.fillText('🔨',12,-10);}
+ctx.strokeStyle='#ff0';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(20,0);ctx.stroke();ctx.restore();
+}
+
+function drawToolInd(){
+if(!PL.currentTool)return;const t=CFG.TOOLS.find(x=>x.id===PL.currentTool);if(!t)return;
+ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(10,10,150,30);ctx.fillStyle='#fff';ctx.font='12px Arial';ctx.textAlign='left';ctx.fillText(`Narzędzie: ${t.n}`,15,25);
+}
+
+function drawHUD(){
+const fp=SHIP.fuel/SHIP.maxFuel;const bw=100;const bh=10;
+ctx.fillStyle='#333';ctx.fillRect(20,cvs.height-40,bw,bh);
+ctx.fillStyle=fp>0.25?(fp>0.5?'#0f0':'#ff0'):'#f00';ctx.fillRect(20,cvs.height-40,bw*fp,bh);
+ctx.fillStyle='#fff';ctx.font='12px Arial';ctx.textAlign='left';ctx.fillText('Paliwo:',20,cvs.height-50);
+const rs=100;const rx=cvs.width-rs-20;const ry=cvs.height-rs-20;
+ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(rx,ry,rs,rs);ctx.strokeStyle='#555';ctx.strokeRect(rx,ry,rs,rs);
+ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(rx+rs/2,ry+rs/2,3,0,Math.PI*2);ctx.fill();
+const all=[...U.planets,...U.systems.flatMap(s=>s.planets)];all.forEach(p=>{const dx=p.x-SHIP.x;const dy=p.y-SHIP.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d>SHIP.scanRange)return;const rs2=rs/(SHIP.scanRange*2);
+ctx.fillStyle=p.discovered?`#${p.color.map(c=>c.toString(16).padStart(2,'0')).join('')}`:'#555';
+ctx.beginPath();ctx.arc(rx+rs/2+dx*rs2,ry+rs/2+dy*rs2,2,0,Math.PI*2);ctx.fill();});
+ctx.beginPath();ctx.arc(rx+rs/2,ry+rs/2,rs/2,0,Math.PI*2);ctx.strokeStyle='rgba(0,255,255,0.5)';ctx.lineWidth=1;ctx.stroke();
+}
+
+function drawCollecting(){
+if(!COLL)return;const rc=CFG.RES[COLL.type];if(!rc)return;const prog=COLL_T/(rc.t/getToolEff());
+ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(cvs.width/2-100,cvs.height/2-20,200,40);
+ctx.fillStyle='#fff';ctx.font='16px Arial';ctx.textAlign='center';ctx.fillText(`Zbieranie: ${rc.i} ${rc.n}`,cvs.width/2,cvs.height/2);
+ctx.fillStyle='#0f0';ctx.fillRect(cvs.width/2-90,cvs.height/2+10,180*prog,10);ctx.strokeStyle='#fff';ctx.strokeRect(cvs.width/2-90,cvs.height/2+10,180,10);
+}
+
+function update(deltaTime){
+if(PAUSED)return;if(GMODE==='space')updateSpace(deltaTime);else if(GMODE==='planet')updatePlanet(deltaTime);
+}
+
+function updateSpace(deltaTime){
+CAM.x=SHIP.x;CAM.y=SHIP.y;handleShip(deltaTime);SHIP.scanning=IN.keys['KeyS']||IN.keys['ArrowDown'];
+updateDiscovered();updateOrbits(deltaTime);
+}
+
+function updatePlanet(deltaTime){
+const cp=GS.currentPlanet;if(!cp)return;handlePlayer(deltaTime);
+if(PL.energy<PL.maxEnergy)PL.energy=Math.min(PL.energy+CFG.PLAYER.REGEN*deltaTime*0.016,PL.maxEnergy);
+updateCrops(deltaTime);if(COLL){const rc=CFG.RES[COLL.type];if(rc){COLL_T+=deltaTime;
+if(COLL_T>=rc.t/getToolEff()){addInv(COLL.type,1,'resource');GS.stats.r++;
+const idx=PR.indexOf(COLL);if(idx>-1)PR.splice(idx,1);PR.push({x:(Math.random()-0.5)*400,y:(Math.random()-0.5)*400,type:cp.resources[Math.floor(Math.random()*cp.resources.length)]});
+COLL=null;COLL_T=0;msg(`Zebrano: ${rc.i} ${rc.n}`);}}}CAM.x=PL.x;CAM.y=PL.y;
+}
+
+function handleShip(deltaTime){
+const ms=SHIP.speed*deltaTime*0.016;if(IN.keys['KeyA']||IN.keys['ArrowLeft'])SHIP.a-=CFG.ROT_SPEED*deltaTime*0.016;
+if(IN.keys['KeyD']||IN.keys['ArrowRight'])SHIP.a+=CFG.ROT_SPEED*deltaTime*0.016;
+if((IN.keys['KeyW']||IN.keys['ArrowUp']||IN.touch.active)&&SHIP.fuel>0){SHIP.x+=Math.cos(SHIP.a)*ms;SHIP.y+=Math.sin(SHIP.a)*ms;SHIP.fuel-=CFG.FUEL_USE*deltaTime*0.016;if(SHIP.fuel<0)SHIP.fuel=0;}
+if(IN.keys['KeyX']){SHIP.x-=Math.cos(SHIP.a)*ms*0.5;SHIP.y-=Math.sin(SHIP.a)*ms*0.5;}
+const md=CFG.U_SIZE/2;const df=Math.sqrt(SHIP.x*SHIP.x+SHIP.y*SHIP.y);if(df>md){const a=Math.atan2(SHIP.y,SHIP.x);SHIP.x=Math.cos(a)*md;SHIP.y=Math.sin(a)*md;}
+}
+
+function handlePlayer(deltaTime){
+const ms=PL.speed*deltaTime*0.016;if(IN.keys['KeyW']||IN.keys['ArrowUp']||IN.touch.active)PL.y-=ms;
+if(IN.keys['KeyS']||IN.keys['ArrowDown'])PL.y+=ms;if(IN.keys['KeyA']||IN.keys['ArrowLeft'])PL.x-=ms;
+if(IN.keys['KeyD']||IN.keys['ArrowRight'])PL.x+=ms;
+if(IN.touch.active){const cx=cvs.width/2;const cy=cvs.height/2;const tx=IN.touch.x;const ty=IN.touch.y;
+const dx=tx-cx;const dy=ty-cy;const d=Math.sqrt(dx*dx+dy*dy);if(d>10){PL.x+=(dx/d)*ms*2;PL.y+=(dy/d)*ms*2;}}
+PL.x=Math.max(-900,Math.min(900,PL.x));PL.y=Math.max(-900,Math.min(900,PL.y));
+}
+
+function updateDiscovered(){
+const all=[...U.planets,...U.systems.flatMap(s=>s.planets)];all.forEach(p=>{const dx=p.x-SHIP.x;const dy=p.y-SHIP.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d<=SHIP.scanRange){p.discovered=true;if(!GS.disc.find(x=>x.id===p.id))GS.disc.push({id:p.id,name:p.name,type:p.type,x:p.x,y:p.y});}});
+}
+
+function updateOrbits(deltaTime){
+U.systems.forEach(sys=>{sys.planets.forEach(p=>{p.orbitAngle+=p.orbitSpeed*deltaTime*0.016;
+p.x=sys.star.x+Math.cos(p.orbitAngle)*p.orbitRadius;p.y=sys.star.y+Math.sin(p.orbitAngle)*p.orbitRadius;});});
+}
+
+function updateCrops(deltaTime){
+for(let r=0;r<FG.length;r++){for(let c=0;c<FG[r].length;c++){const plot=FG[r][c];if(plot&&plot.crop){const crop=CFG.CROPS.find(x=>x.id===plot.crop);if(crop)plot.growth=Math.min(plot.growth+deltaTime,crop.g);}}}
+}
+
+function checkPlanetClick(x,y){
+if(!cvs)return;const rect=cvs.getBoundingClientRect();const wx=(x-rect.left-cvs.width/2)/CAM.z+CAM.x;const wy=(y-rect.top-cvs.height/2)/CAM.z+CAM.y;
+const all=[...U.planets,...U.systems.flatMap(s=>s.planets)];for(let i=0;i<all.length;i++){const p=all[i];const dx=wx-p.x;const dy=wy-p.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d<=p.radius){SEL_P=p;showPlanetInfo(p);return;}}hidePlanetInfo();SEL_P=null;
+}
+
+function showPlanetInfo(p){
+const info=document.createElement('div');info.style.position='absolute';info.style.top='50%';info.style.left='50%';info.style.transform='translate(-50%,-50%)';
+info.style.background='rgba(0,0,0,0.9)';info.style.padding='20px';info.style.borderRadius='10px';info.style.color='#fff';info.style.zIndex='100';
+info.style.pointerEvents='auto';info.innerHTML=`<h3>${p.name}</h3><div>Typ: ${p.type}</div><div>Zasoby: ${p.resources.map(r=>CFG.RES[r]?.i||r).join(', ')}</div><button class="btn" onclick="land()">Wyląduj</button><button class="btn" onclick="hidePlanetInfo()">Anuluj</button>`;
+document.getElementById('ui').appendChild(info);
+}
+
+function hidePlanetInfo(){
+const infos=document.querySelectorAll('#ui > div[style*="translate(-50%,-50%)"]');infos.forEach(i=>i.remove());SEL_P=null;
+}
+
+function land(){
+if(!SEL_P)return;const d=Math.sqrt(Math.pow(SEL_P.x-SHIP.x,2)+Math.pow(SEL_P.y-SHIP.y,2));const rf=d*0.05;
+if(SHIP.fuel<rf){msg('Za mało paliwa!');return;}SHIP.fuel-=rf;SEL_P.visited=true;GS.currentPlanet=SEL_P;GS.stats.p++;
+enterPlanet();hidePlanetInfo();
+}
+
+function enterPlanet(){
+GMODE='planet';PL.x=0;PL.y=0;CAM.x=0;CAM.y=0;PR=[];const cp=GS.currentPlanet;
+for(let i=0;i<20;i++){const a=Math.random()*Math.PI*2;const d=50+Math.random()*300;PR.push({x:Math.cos(a)*d,y:Math.sin(a)*d,type:cp.resources[Math.floor(Math.random()*cp.resources.length)]});}
+const hud=document.getElementById('hud');const inv=document.getElementById('inventory');
+if(hud)hud.style.display='none';if(inv)inv.style.display='none';
+msg(`Wylądowałeś na ${cp.name}!`);
+}
+
+function launch(){
+GMODE='space';const cp=GS.currentPlanet;SHIP.x=cp.x+cp.radius*3;SHIP.y=cp.y;SHIP.a=0;CAM.x=SHIP.x;CAM.y=SHIP.y;
+const hud=document.getElementById('hud');const inv=document.getElementById('inventory');const shipMenu=document.getElementById('shipMenu');
+if(hud)hud.style.display='block';if(inv)inv.style.display='block';if(shipMenu)shipMenu.style.display='none';
+PAUSED=false;COLL=null;COLL_T=0;updateHUD();msg('Wyruszasz w kosmos!');
+}
+
+function checkResourceClick(x,y){
+if(GMODE!=='planet')return;if(!cvs)return;const rect=cvs.getBoundingClientRect();
+const wx=(x-rect.left-cvs.width/2)/CAM.z+CAM.x;const wy=(y-rect.top-cvs.height/2)/CAM.z+CAM.y;
+for(let i=0;i<PR.length;i++){const r=PR[i];const dx=wx-r.x;const dy=wy-r.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d<=20){const pd=Math.sqrt(Math.pow(r.x-PL.x,2)+Math.pow(r.y-PL.y,2));if(pd<=40){COLL=r;COLL_T=0;}else{msg('Podejdź bliżej!');}return;}}
+}
+
+function attemptCollect(){
+if(GMODE!=='planet')return;for(let i=0;i<PR.length;i++){const r=PR[i];const dx=r.x-PL.x;const dy=r.y-PL.y;const d=Math.sqrt(dx*dx+dy*dy);
+if(d<=40){COLL=r;COLL_T=0;return;}}
+}
+
+function selInv(i){SEL_INV=i;updateInv();const item=GS.inv[i];if(item&&item.type==='tool'){PL.currentTool=item.id;updateHUD();msg(`Wybrano: ${CFG.TOOLS.find(t=>t.id===item.id)?.n||'?'}`);}}
+
+function addInv(id,amt,type){const ei=GS.inv.find(i=>i&&i.id===id&&i.type===type);if(ei){const r=CFG.RES[id];const ms=r?r.m:99;
+if(ei.amount+amt<=ms){ei.amount+=amt;}else{const rem=amt-(ms-ei.amount);ei.amount=ms;addInv(id,rem,type);}}else{const es=GS.inv.findIndex(i=>i===null);
+if(es!==-1){GS.inv[es]={id:id,type:type,amount:amt};}else{msg('Inwentarz pełny!');}}updateInv();}
+
+function selSeed(i){SEL_CROP=i;updateFarm();}
+
+function selPlot(r,c){if(SEL_CROP!==null){const crop=CFG.CROPS[SEL_CROP];if(!crop)return;const si=GS.inv.find(i=>i&&i.type==='crop'&&i.id===crop.id);
+if(!si||si.amount<=0){msg('Brak nasion!');return;}if(!FG[r])FG[r]=[];FG[r][c]={crop:crop.id,growth:0};si.amount--;
+if(si.amount<=0){const idx=GS.inv.indexOf(si);if(idx>-1)GS.inv[idx]=null;}SEL_CROP=null;updateFarm();msg(`Posadzono ${crop.n}`);}else{
+if(FG[r]?.[c]){const plot=FG[r][c];const crop=CFG.CROPS.find(x=>x.id===plot.crop);if(!crop)return;
+if(plot.growth>=crop.g){const ya=Math.floor(crop.y.min+Math.random()*(crop.y.max-crop.y.min+1));addInv(crop.id,ya,'crop');
+FG[r][c]=null;updateFarm();msg(`Zebrano ${ya} ${crop.n}`);}else{msg(`Roślina nie dojrzała (${Math.round(plot.growth/crop.g*100)}%)`);}}}}
+
+function updateHUD(){
+if(GMODE==='space'){const pos=document.getElementById('shipPosition');const fuel=document.getElementById('shipFuel');const mf=document.getElementById('shipMaxFuel');
+if(pos)pos.textContent=`${Math.round(SHIP.x)},${Math.round(SHIP.y)}`;if(fuel)fuel.textContent=Math.round(SHIP.fuel);if(mf)mf.textContent=Math.round(SHIP.maxFuel);}
+else if(GMODE==='planet'){const cp=document.getElementById('currentPlanet');const ct=document.getElementById('currentPlanetType');
+const pe=document.getElementById('playerEnergy');const tool=document.getElementById('tool');
+if(cp)cp.textContent=GS.currentPlanet.name;if(ct)ct.textContent=GS.currentPlanet.type;
+if(pe)pe.textContent=Math.round(PL.energy);if(tool)tool.textContent=PL.currentTool?CFG.TOOLS.find(t=>t.id===PL.currentTool)?.n||'?':'Brak';
+}
+}
+
+function updateInv(){
+for(let i=0;i<20;i++){const slot=document.getElementById(`inv-${i}`);const amt=document.getElementById(`amt-${i}`);
+if(slot&&amt){const item=GS.inv[i];if(item){if(item.type==='resource'){const r=CFG.RES[item.id];slot.textContent=r?r.i:'?';slot.title=`${r.n}: ${item.amount}`;amt.textContent=item.amount>1?item.amount:'';}
+else if(item.type==='crop'){const c=CFG.CROPS.find(x=>x.id===item.id);slot.textContent=c?c.i:'?';slot.title=`${item.id}: ${item.amount}`;amt.textContent=item.amount>1?item.amount:'';}
+else if(item.type==='tool'){const t=CFG.TOOLS.find(x=>x.id===item.id);slot.textContent=t?'🔨':'?';slot.title=t?t.n:'Narzędzie';amt.textContent='';}else{slot.textContent='';slot.title='';amt.textContent='';}
+slot.classList.toggle('selected',SEL_INV===i);}}
+}
+}
+
+function updateFarm(){
+for(let i=0;i<CFG.CROPS.length;i++){const slot=document.getElementById(`seed-${i}`);if(slot){const ci=GS.inv.find(x=>x&&x.type==='crop'&&x.id===CFG.CROPS[i]?.id);
+if(ci){const c=CFG.CROPS.find(x=>x.id===ci.id);slot.textContent=c?c.i:'?';slot.title=`${c.n}: ${ci.amount}`;}else{slot.textContent='';slot.title='';}
+slot.classList.toggle('selected',SEL_CROP===i);}}
+for(let r=0;r<CFG.FARM.ROWS;r++){for(let c=0;c<CFG.FARM.COLS;c++){const plot=document.getElementById(`plot-${r}-${c}`);if(plot){const fp=FG[r]?.[c];
+if(fp&&fp.crop){const crop=CFG.CROPS.find(x=>x.id===fp.crop);const gp=fp.growth/crop.g;
+plot.textContent=gp<0.33?'🌱':(gp<0.66?'🌿':crop.i);plot.title=`${crop.n}: ${Math.round(gp*100)}%`;}else{plot.textContent='';plot.title='Pusta';}}}}
+}
+
+function buy(type,id){
+if(type==='u'){const u=CFG.UPGRADES.find(x=>x.id===id);if(!u)return;if(GS.money>=u.c){if(GS.upgrades.includes(id)){msg('Masz to!');return;}
+GS.money-=u.c;GS.upgrades.push(id);if(u.s)SHIP.speed+=u.s;if(u.f){SHIP.maxFuel+=u.f;SHIP.fuel=Math.min(SHIP.fuel+u.f,SHIP.maxFuel);}if(u.r)SHIP.scanRange+=u.r;updateHUD();msg(`Kupiono: ${u.n}`);}else msg('Za drogo!');}
+else if(type==='s'){const c=CFG.CROPS.find(x=>x.id===id);if(!c)return;const cost=c.s*10;if(GS.money>=cost){GS.money-=cost;addInv(id,10,'crop');updateHUD();msg(`Kupiono 10 ${c.n}`);}else msg('Za drogo!');}
+else if(type==='t'){const t=CFG.TOOLS.find(x=>x.id===id);if(!t)return;if(GS.money>=t.c){GS.money-=t.c;addInv(id,1,'tool');updateHUD();msg(`Kupiono: ${t.n}`);}else msg('Za drogo!');}
+}
+
+function openShipMenu(){const sm=document.getElementById('shipMenu');if(sm){sm.style.display='block';PAUSED=true;const sf=document.getElementById('shipFuel');const mf=document.getElementById('shipMaxFuel');if(sf)sf.textContent=Math.round(SHIP.fuel);if(mf)mf.textContent=Math.round(SHIP.maxFuel);}}
+function closeShipMenu(){const sm=document.getElementById('shipMenu');if(sm){sm.style.display='none';PAUSED=false;}}
+function openShop(){const su=document.getElementById('shopUI');if(su){su.style.display='block';PAUSED=true;}}
+function closeShop(){const su=document.getElementById('shopUI');if(su){su.style.display='none';PAUSED=false;}}
+function toggleFarm(){const fu=document.getElementById('farmUI');if(fu){fu.style.display=fu.style.display==='block'?'none':'block';PAUSED=fu.style.display==='block';if(fu.style.display==='block')updateFarm();}}
+function help(){msg('WASD - poruszanie, Spacja - zbieranie, ESC - menu, 1-9 - inwentarz, Klik - wybierz planetę',5000);}
+function resume(){PAUSED=false;const menu=document.getElementById('menu');if(menu)menu.style.display='none';}
+function toggleMenu(){PAUSED=!PAUSED;const menu=document.getElementById('menu');if(menu)menu.style.display=PAUSED?'flex':'none';}
+
+function save(){
+const sd={GS,SHIP,CAM,PL,GMODE,FG,seed:U.seed||GS.seed};localStorage.setItem('cosmicFarmerV2',JSON.stringify(sd));msg('Zapisano!');
+}
+function load(){
+const sd=localStorage.getItem('cosmicFarmerV2');if(!sd){msg('Brak zapisu!');return;}
+try{const d=JSON.parse(sd);GS=d.GS||{};SHIP=d.SHIP||{};CAM=d.CAM||{};PL=d.PL||{};GMODE=d.GMODE||'planet';FG=d.FG||[];
+Math.seedrandom(d.seed);generateUniverse();if(GMODE==='planet'&&GS.currentPlanet){PR=[];for(let i=0;i<20;i++)PR.push({x:(Math.random()-0.5)*400,y:(Math.random()-0.5)*400,type:GS.currentPlanet.resources[Math.floor(Math.random()*GS.currentPlanet.resources.length)]});}
+updateHUD();updateInv();const hud=document.getElementById('hud');const inv=document.getElementById('inventory');
+if(GMODE==='planet'){if(hud)hud.style.display='none';if(inv)inv.style.display='none';}else{if(hud)hud.style.display='block';if(inv)inv.style.display='block';}
+msg('Wczytano!');const menu=document.getElementById('menu');if(menu)menu.style.display='none';}catch(e){msg('Błąd: '+e.message);}
+}
+
+function resizeCanvas(){
+if(!cvs)return;let w=CFG.W;let h=CFG.H;if(CFG.SCALE){const ar=w/h;const wr=window.innerWidth/window.innerHeight;
+if(wr>ar){w=window.innerHeight*ar;h=window.innerHeight;}else{w=window.innerWidth;h=window.innerWidth/ar;}}
+cvs.width=w;cvs.height=h;if(w<600){const hud=document.getElementById('hud');const inv=document.getElementById('inventory');
+if(hud)hud.style.fontSize='10px';if(inv)inv.style.gridTemplateColumns='repeat(3, 1fr)';}else{const hud=document.getElementById('hud');const inv=document.getElementById('inventory');
+if(hud)hud.style.fontSize='12px';if(inv)inv.style.gridTemplateColumns='repeat(5, 1fr)';}
+}
+
+function initInput(){
+IN={keys:{},mouse:{x:0,y:0,left:false,right:false},touch:{x:0,y:0,active:false},lastTouchTime:0};
+window.addEventListener('keydown',e=>{IN.keys[e.code]=true;if(e.code==='Escape')toggleMenu();if(e.code==='Space'){if(GMODE==='space'&&SEL_P)land();else attemptCollect();}
+if(e.code.startsWith('Digit')){const si=parseInt(e.code.replace('Digit',''))-1;if(si>=0&&si<20)selInv(si);}});
+window.addEventListener('keyup',e=>{IN.keys[e.code]=false;});
+if(cvs){cvs.addEventListener('mousemove',e=>{const r=cvs.getBoundingClientRect();IN.mouse.x=e.clientX-r.left;IN.mouse.y=e.clientY-r.top;});
+cvs.addEventListener('mousedown',e=>{if(e.button===0)IN.mouse.left=true;if(e.button===2)IN.mouse.right=true;
+if(GMODE==='space')checkPlanetClick(e.clientX,e.clientY);else checkResourceClick(e.clientX,e.clientY);});
+cvs.addEventListener('mouseup',e=>{if(e.button===0)IN.mouse.left=false;if(e.button===2)IN.mouse.right=false;});
+cvs.addEventListener('contextmenu',e=>e.preventDefault());
+cvs.addEventListener('touchstart',e=>{e.preventDefault();const r=cvs.getBoundingClientRect();const t=e.touches[0];IN.touch.x=t.clientX-r.left;IN.touch.y=t.clientY-r.top;IN.touch.active=true;IN.lastTouchTime=Date.now();
+if(GMODE==='space')checkPlanetClick(t.clientX,t.clientY);else checkResourceClick(t.clientX,t.clientY);});
+cvs.addEventListener('touchend',e=>{e.preventDefault();IN.touch.active=false;});
+cvs.addEventListener('touchmove',e=>{e.preventDefault();const r=cvs.getBoundingClientRect();const t=e.touches[0];IN.touch.x=t.clientX-r.left;IN.touch.y=t.clientY-r.top;});}
+}
+
+let lastTime=0;let frameCount=0;let fps=0;let lastFpsUpdate=0;
+function gameLoop(timestamp){
+if(!lastTime)lastTime=timestamp;const deltaTime=timestamp-lastTime;lastTime=timestamp;
+frameCount++;if(timestamp-lastFpsUpdate>=1000){fps=frameCount;frameCount=0;lastFpsUpdate=timestamp;
+const fc=document.getElementById('fps');if(fc)fc.textContent=`FPS: ${fps}`;}
+update(deltaTime);render();GLOOP=requestAnimationFrame(gameLoop);
+}
+
+window.onload=()=>{cvs=document.getElementById('gameCanvas');if(!cvs)return;ctx=cvs.getContext('2d');
+resizeCanvas();window.addEventListener('resize',resizeCanvas);initInput();initUI();newGame();GLOOP=requestAnimationFrame(gameLoop);
+const loading=document.getElementById('loading');if(loading)loading.style.display='none';};
+window.onbeforeunload=()=>{if(GLOOP)cancelAnimationFrame(GLOOP);};
+</script>
+</body>
+</html>
